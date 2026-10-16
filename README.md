@@ -1,6 +1,6 @@
-# Lace SDK consumer: passkey wallet and Cardano custody account
+# Lace SDK consumer: Cardano and Midnight
 
-Testnet-only Cardano Preprod demo of `@input-output-hk/lace-sdk/cardano`. It has two parts:
+Developer reference app using one packaged `@laceio/sdk` for Cardano Preprod and Midnight Preview. The original Cardano route has two parts:
 
 - A passkey wallet whose keys stay in the hosted Lace signer, `https://passkey-preview.lace.io`. No recovery phrase is shown or exported.
 - A proof of concept of a Cardano custody account on custody contract revision 3. The hosted fee sponsor, `https://sponsor-preprod.lw.iog.io`, pays for the account's creation and lends collateral to every later transaction. The browser reaches the sponsor through a relay on the Vite server, which holds the sponsor key.
@@ -9,17 +9,17 @@ Testnet-only Cardano Preprod demo of `@input-output-hk/lace-sdk/cardano`. It has
 
 > **Warning:** The custody contract is unaudited. Use Preprod test ADA only.
 
-## SDK package
+## Historical Cardano baseline package
 
-The SDK is vendored as `vendor/input-output-hk-lace-sdk-0.1.0-fe9d709f7.tgz`, an `npm pack` of lace-platform PR #2825 at commit `fe9d709f71dcb1d9f134c095568850c55450a5c0`. Its tree is the same as the published `0.1.0-dev.11`. SHA-256: `24acbaaa934613f7b27abb3c116281660dd622f912868aa6c4af1e4de8b9b9e9`. Type checks, unit tests, the production build and the browser suite pass with this package.
+The superseded SDK was vendored as `vendor/input-output-hk-lace-sdk-0.1.0-fe9d709f7.tgz`, an `npm pack` of lace-platform PR #2825 at commit `fe9d709f71dcb1d9f134c095568850c55450a5c0`. Its tree is the same as the published `0.1.0-dev.11`. SHA-256: `24acbaaa934613f7b27abb3c116281660dd622f912868aa6c4af1e4de8b9b9e9`. The historical baseline records passing type checks, unit tests, production build and browser suite with this package. These results do not establish Midnight acceptance or regression results for a replacement package.
 
 ## Start
 
 1. Install and check the package:
 
    ```bash
-   cd /home/mkazlauskas/Code/iog/lace-sdk-consumer
-   sha256sum vendor/input-output-hk-lace-sdk-0.1.0-fe9d709f7.tgz
+   cd lace-sdk-consumer
+   shasum -a 256 vendor/laceio-sdk-0.1.0.tgz vendor/input-output-hk-temenos-attestation-verifier-0.3.0.tgz
    npm ci
    test -e .env || cp .env.example .env
    ```
@@ -35,10 +35,14 @@ The SDK is vendored as `vendor/input-output-hk-lace-sdk-0.1.0-fe9d709f7.tgz`, an
 
    ```bash
    npm run typecheck
+   npm run test:e2e -- tests/e2e/runtime.spec.ts
    npm test
    npm run build
    npm run dev -- --host localhost --port 5173 --strictPort
    ```
+
+   The runtime browser check comes first because three startup-diagnostic unit tests
+   read the Vite dependency cache that the dev server creates, and `npm ci` removes it.
 
 4. Open `http://localhost:5173/`. Keep this exact origin: the preview signer serves custody requests only for the origins its build lists, which are `http://localhost:5173` and `https://midnight.city`. Allow the signer popup.
 
@@ -77,3 +81,447 @@ A 20 ADA deposit covers the demo grant (4 ADA per spend, 6 ADA in total) and a 2
 - The Blockfrost provider must report `registered` for reward accounts. Otherwise every build fails with `CardanoCustodyLogicNotRegisteredError`.
 
 The custody log turns the SDK's typed errors, the sponsor's refusals and the relay's refusals into one line each, with what to do about them. A line starts with the error's class name and its `code` in brackets, such as `CardanoCustodyLogicRewardBalanceError [custody-logic-reward-balance]:`. A production build may shorten the class name, but it keeps the code.
+
+
+## Midnight reference route
+
+Open `http://localhost:5173/midnight`. The original `/` route retains Cardano,
+passkey and custody flows. Buffer initializes before either route imports its
+SDK graph. All Midnight state and operations use the public `@laceio/sdk/midnight`
+entry; there are no workspace aliases. Validation and live limitations are
+recorded below.
+
+Browser builds also require the real `assert@2.1.0` polyfill: `vite.config.ts`
+maps exact `assert`/`node:assert` imports to it. DUST address serialization uses
+SCALE assertions; Vite's browser-external stub cannot execute them. Keep this
+alias and the Buffer initialization when adapting the consumer. Browser loading
+also requires the config's fixed, empty `process.env.NODE_DEBUG` definition
+for the assertion package's browser utility dependency; it exposes no host values.
+The wallet-free runtime probe exercises public dummy DUST, shielded and unshielded address
+codecs (including invalid input) in both dev and production builds.
+
+Keep the scoped `package.json` override from `wallet-sdk-address-format@3.1.2`
+to `@scure/base@2.2.0`, matching the Lace source baseline. Version 2.4.0 defaults
+to a 90-character decoding limit and rejects the 132-character Preview shielded
+address strings used by SDK transfer/connector parsing. Install with the matching
+lockfile; the shared probe checks string parse/decode/re-encode and rejects a bad
+checksum, malformed shielded payload, wrong network and wrong address type.
+
+### Packaged dependencies
+
+The two archives below are private build artifacts and are not committed. Before
+running `npm ci`, obtain them through the approved private build/package source
+and place them at these paths:
+
+- `vendor/laceio-sdk-0.1.0.tgz`
+- `vendor/input-output-hk-temenos-attestation-verifier-0.3.0.tgz`
+
+Keep these files local; `.gitignore` excludes them. Their pinned hashes below
+identify the artifacts used for the recorded checks.
+
+The installed canary package is the build of lace-platform `main` at `75c3de4267`, the
+merge of PR #2875, packed with the SDK's `scripts/pack.mjs` from a canary build on
+2026-10-16 13:12 CEST; that build ran both channels with all of the SDK's checks. The
+SDK artifact and installed SDK code were not modified: the installed package matches
+the tarball file for file. The consumer matches the SDK's Preview Temenos deployment
+and uses verifier 0.3.0. The behavioral pin test exercises the public SDK factory with a
+synthetic verifier and checks its selected Preview config against the relay; it also
+rejects the old Preprod proof URL.
+
+Validation on 2026-10-16 against this build: type-check and production build passed;
+144 unit tests passed (0 failed/skipped) once a browser check had populated the Vite
+cache (see *Start*); `playwright-report/checks-75c3de4267-20261016.log` records them,
+and `sdk-build-75c3de4267-20261016.log` and `sdk-pack-75c3de4267-20261016.json` there
+record the SDK build and pack. The same log records the four Midnight browser specs,
+headless, 19/19, including the startup-diagnostic spec, which now loads both the SDK's
+`sdk-init` and `watch` chunks. Visible Chrome dev checks passed 13/13 (11 Midnight UI, one transport,
+one actual runtime) and production runtime 1/1, 11:28:08–11:28:23 UTC. Wallet-free
+Temenos preflight passed 1/1 at 11:28:23–11:28:29 UTC: obtain-evidence,
+fetch-expected-values, verify-locally, warden-verify and bind-channel all completed.
+The read-only live run passed 3/3 (0 failed/skipped), 11:28:29–11:39:21 UTC: indexed
+restore/state, same-page instance isolation and nonzero account determinism. No
+registration or diagnostics opt-in was set.
+
+The one-unit own-wallet Temenos transfer failed on its first attempt,
+11:39:21–11:48:59 UTC: attestation and the session completed, then the three encrypted
+proxy requests returned upstream HTTP 404, 400 and 404; the page stopped at the failed
+proving phase and nothing was submitted. Run once more with the same SDK and app code,
+it passed 1/1 (0 failed/skipped), 11:52:46–12:02:44 UTC, exit 0: all three proxy
+responses were HTTP 200, and the Submission panel reached `confirmed`, SDK `returned`,
+and history type `Self` for activity
+`4a9c4ce2ad2351d52ea1cc2a06b768af05d78067017bb09dc8242bc66533c9a8`, engine txId
+`00775b4aa81d6451aab5a1ce30202ccc8acf32634a45a96999daba06e346551aa9`. The cause of the
+upstream errors is not established. No watchdog fired. This live spec does not observe
+other destinations; only the non-proving and Temenos preflight specs guard them. The
+JSON reports are `playwright-report/*-aligned-20261016T112808253Z.json`
+and `playwright-report/temenos-transfer-retry-aligned-20261016T115246442Z.json` (all
+ignored).
+
+The previous build, lace-platform PR #2875 at `c19ed1f0ed` (SHA-256
+`00715c95d8d5f5fda9d29fee61cc8bddc9d70442ebfeffd987f2a17d0ad6c842`), passed the same
+sequence on 2026-10-16, 00:45–01:07 UTC, its Temenos transfer on the first attempt
+(activity `c5a4931bd5b5c37fc7044ca23592101c01e8f0c8bec1357cff8d63089f63048c`).
+Cardano passkey/custody browser checks were not run in either validation: they require
+an external signer build under lace-platform, outside this task's permitted filesystem scope. The non-proving live suite (ten checks: restore, signing, state, history, fee
+estimate, resync; no transaction) passed on 2026-10-15 13:36–13:55 CEST (Playwright 1
+passed, 0 blocked requests) against the earlier canary build `6f084a708c` (SHA-256
+`c000b707…4459931`).
+
+- Package: `@laceio/sdk@0.1.0`, **canary**, `vendor/laceio-sdk-0.1.0.tgz`.
+- SHA-256: `c51f65504b45d86e11a661e58ce7293b56a76693aa10b8ad8924dfe7afcdd608` (verified after copying).
+- External dependencies: `@midnight-ntwrk/ledger-v8@8.1.0` (peer range `^8.1.0` in this build),
+  `@midnightntwrk/wallet-sdk@1.2.0`, `@midnightntwrk/wallet-sdk-abstractions@2.1.0`,
+  `@midnightntwrk/wallet-sdk-address-format@3.1.2` and consumer-local
+  `@input-output-hk/temenos-attestation-verifier@0.3.0` (artifact/hash below).
+- This package is local and unpublished.
+
+Both Cardano and Midnight resolve this same SDK version through the public
+`@laceio/sdk/cardano` and `@laceio/sdk/midnight` entries. No configuration alias
+targets SDK source. The old tarball is retained for historical Cardano validation.
+
+### Configuration and prerequisites
+
+- Live validation uses **Preview**. Network selection also exposes the other
+  supported networks. Custom networks need both node and indexer URLs.
+- Midnight, connector, mainnet/preprod/preview support, remote prover, Temenos
+  and unshielded features are enabled locally through `featureDev`. Remote feature
+  configuration and shielded-only history are not enabled.
+- Preview uses `https://rpc.preview.midnight.network` and
+  `https://indexer.preview.midnight.network/api/v4/graphql`, the public SDK
+  endpoints used in prior live checks. The extension proxy endpoints
+  return 410 and are deliberately not used. Other networks use public SDK
+  defaults or the explicitly entered overrides, displayed after restore.
+- Local proving uses `http://127.0.0.1:6300`. A self-transfer proved with
+  `midnightntwrk/proof-server:8.1.3` was submitted and **confirmed** on Preview on
+  2026-10-14 (transaction `02139e2c375c7089aa5c60a90193a1578f25c64d8edd85edbb7cdd271b2adace`,
+  block 1294134 per the read-only reconciliation record of that run; the same
+  hash appears in the wallet's history). The page of that run still read "Proved"
+  with no identifier. The most likely cause is that `submitMidnightTx` returned
+  an error or timed out after the transaction was broadcast, and the page then
+  discarded the activity hash it had computed; a hang would have shown the same
+  symptom. The page now records that hash before the SDK
+  call and reports the outcome from history (see
+  [Using the route](#using-the-route)), whichever of those happened. Why the SDK
+  call did not return its identifier in time is not established.
+  Temenos on Preview uses `https://api.proofserver.preview.wastedp.io`, `tee-delegated`, the public
+  `createTemenosAttestedProver`, and the exact installed verifier package's
+  `AMD_ROOT_CERTIFICATES`. The consumer supplies the adapter's injected verifier:
+  a fresh `AttestationVerifier` and AKX evidence/channel, ledger, local and Warden
+  dependencies from the adapter's baked config on every call. The private verifier
+  is an explicit consumer-local file dependency, never a public SDK dependency.
+  Authorized artifact: `input-output-hk-temenos-attestation-verifier-0.3.0.tgz`,
+  SHA-256 `408fb33f289c84bbedc9eff37ff7a154a2e69ae87fdcc0ccdfd5c6e34e3bfd02`.
+  Root certificates never come from a server or an input
+  field. The aligned Preview deployment/verifier 0.3.0 runs on 2026-10-16 completed
+  encrypted proving and confirmed the self-transfers recorded above. Encrypted proving
+  can still fail upstream after a successful attestation: one attempt received HTTP
+  404/400 from the proxy and passed when run again, and earlier live checks recorded an
+  upstream HTTP400 in the same step (causes unestablished).
+  Attestation failure never falls back to ordinary HTTP. Temenos `check` remains
+  unsupported; in-process and paired-device proving are not offered.
+- Temenos evidence/AKX requires the same-origin `/temenos-relay` backend, installed
+  by `temenos-relay.ts` for both `npm run dev` and `npm run preview`. A static
+  deployment needs an equivalent backend; the scoped fetch explicitly refuses
+  responses without the relay marker. The relay permits only HTTPS to
+  `attestation.proofserver.preview.wastedp.io`: GET `/attestation.json` and
+  `/tee_attestation/enclave-key`, POST `/tee_attestation/session`,
+  `/tee_attestation/session/complete` and `/tee_attestation/proxy`. Two further
+  POST routes serve the installed verifier: `/warden/verify-attestation` forwards
+  only its public attestation envelope to `https://warden.wastedp.io/dapps/verify_attestation`;
+  `/ledger/contract-state` maps the SDK's Preprod default
+  `https://indexer.preprod.midnight.network/api/v4/graphql` to
+  `https://midnight-preprod.blockfrost.io/api/v0`. The latter accepts only the
+  installed `contractAction(address) { state }` query with a 64-hex public contract
+  address, never mutations or arbitrary GraphQL. SDK deployment/trust identities
+  remain unchanged. The Warden's verdict and ledger state still undergo all
+  existing verifier checks.
+  Attestation, transcript signatures and AKX encryption stay in the verifier in
+  the browser; the relay carries public evidence/handshake data and ciphertext.
+  Verifier 0.3 encrypts a version-1 HTTP request envelope inside the same
+  `{sid,ciphertext}` outer body. Session hello/completion shapes are unchanged;
+  the relay does not decrypt or accept plaintext proof envelopes. Its ledger
+  query, Warden client and evidence fetches are byte-identical to 0.2, so the
+  fixed Blockfrost Preprod forwarding target remains appropriate. Non-2xx
+  responses carry a fixed `x-lace-temenos-error-origin` classification
+  (`relay` or `upstream`); diagnostics read this metadata, never bodies.
+  This identifies who produced the response, not the root cause: `relay` also
+  includes upstream connection failures, timeouts and refused redirects.
+  It rejects credentials, cross-origin browser requests, redirects and unlisted
+  routes; validates upstream TLS; logs/persists no headers or bodies; and limits
+  each exchange to 30 seconds, four concurrent exchanges, 1 MiB evidence, 4 KiB
+  handshake, 4 MiB ledger responses or 16 MiB encrypted envelopes. These limits fail closed. Keep Vite
+  on localhost; a deployed backend needs the application's access controls.
+  Validation distinguishes attestation from the separately confirmed transfer;
+  transport availability alone establishes no transaction result.
+- Before starting Vite, set server-only `TEMENOS_BLOCKFROST_PREPROD_TOKEN_FILE`
+  to an absolute path to an owned, regular, mode `600` file containing the
+  authorized Midnight Preprod project token. Symlinks, unsafe permissions,
+  missing/malformed tokens, oversized files and enabled native HTTP(S) debug
+  logging fail closed. Only the fixed
+  official Preprod Blockfrost host receives `project_id`; it never enters the
+  browser bundle, URL, logs or relay diagnostics. Do not use a `VITE_` variable
+  for it. No token is needed by the evidence, handshake or Warden routes.
+- Wallet-free attestation can be checked separately, with explicit
+  authorization:
+  `TEMENOS_LIVE_PREFLIGHT=1 npm run test:midnight:live -- tests/live/temenos.live.spec.ts`
+  with the server token-file variable already set. This opt-in check uses the
+  same `createConsumerTemenosProver` factory as the application, establishes all
+  five attestation phases and the channel, then closes it. It creates no wallet
+  and performs no proving, signing or submission. Its attachment contains only
+  fixed phase/status/result values; the live config disables secret-bearing
+  traces/screenshots/video. The offline browser regression stays synthetic.
+- Use a fresh disposable test phrase and an in-memory session password. They are
+  cleared from the input elements after restore, never written to localStorage,
+  logged or included in fixtures. Storage is `storageInMemory`; reload discards
+  the session. Restoring does not authorize any signing or submission.
+- Prior live checks recorded NIGHT receipt, confirmed own DUST registration and positive
+  generated/spendable DUST, and a local-prover self-transfer confirmed on chain.
+  That transfer's balance change and fee consumption remain unverified.
+- Real transfers require synchronized, funded assets and spendable DUST. External
+  DUST designation requires NIGHT and no existing generation capacity. Circuit
+  operations additionally require real preimage/ZKIR/prover/verifier material.
+  Missing prerequisites leave the corresponding acceptance row open.
+
+### Using the route
+
+1. Restore the phrase on Preview. Index 0 is always derived; an additional index
+   (for example 7) exposes deterministic indexed restoration. Select an account.
+2. Inspect all three receive addresses, hex public keys, token available/pending
+   balances, generated versus spendable DUST, generation details and sync state.
+   Missing state is not zero. Rounded sync progress and cached success timestamps
+   do not establish current completion or connectivity.
+3. For a homogeneous transfer, supply output JSON with `to`, `tokenId` from state,
+   and `amount` as a positive integer string in smallest units. Estimate the fee,
+   build, review signing, review proving, then review submission separately.
+4. For registration, leave the DUST destination empty for own-address behavior or
+   enter an eligible external DUST address. Review occurs **before** the helper,
+   which signs internally. Then review proving and submission separately.
+5. Advanced connector requests use `desiredOutputs` rows with `kind`, raw ledger
+   `type`, `value` as a positive integer string and `recipient`. Intent also takes
+   `desiredInputs` rows (`kind`, `type`, `value`) and
+   `options: {intentId: "random", payFees: true}`. Sealed/unsealed balancing takes
+   `tx` hex and optional `options.payFees`. These helpers may sign/prove, so their
+   review precedes the call; submission is still separate. `intentId` is
+   accepted but ignored. Use the message and circuit controls for the remaining adapters.
+
+Cancellation, edited inputs, account changes and setup changes discard approvals
+and staged transactions. An in-flight SDK operation is not guaranteed cancellable;
+its late result cannot become a usable next stage. Each approval is single-use.
+
+Submission is the exception: once approved it cannot be cancelled or discarded.
+While the SDK call is in flight, cancel, the transaction, advanced and setup
+controls, the account selector, reset and clear-session are disabled, and the
+page refuses programmatic attempts to discard. The **Submission** panel lists
+every submission of the session, newest first, keyed by the proved transaction's
+activity hash. A later submission never replaces an earlier one: an `uncertain`
+hash stays listed until history resolves it, and the review of a new submission
+names every unresolved earlier hash, so approving it acknowledges them. Each
+record stores its hash before the SDK call and then reports one of:
+
+| Stage | Meaning |
+|---|---|
+| `submitting` | Submitting (may broadcast from now on); awaiting the SDK's finality result; history is watched for the hash. |
+| `submitted` | The SDK returned its `txId`; history confirmation of the hash is pending. |
+| `confirmed` | A history row with the hash appeared (Self/Send/Receive). This holds even if the SDK call is still pending or later fails. |
+| `failed-on-chain` | History lists the hash as Failed. |
+| `uncertain` | The SDK returned an error after the transaction may have been broadcast. Check history or the chain for the hash before retrying; a later history row still confirms it. |
+| `failed` | The SDK failed while resolving the account's engine, before sending anything. A later history row for the hash still overrides it. |
+
+Limitations:
+
+- History of the submitting account keeps resolving its records after the
+  account selector moves to another account. After **Clear session** nothing is
+  observed: the records stay listed with their last stage and resolve only after
+  the same wallet is restored in this page. A reload loses them; check the chain
+  for the hash. Leaving the page clears the session even during a submission, so
+  a page restored from the browser's back-forward cache cannot resolve the
+  record that was in flight.
+- The status line announces only the newest submission. An earlier record
+  resolved from history updates the Submission list without replacing the
+  status of another operation.
+- `confirmed` reflects the history row's type. Upstream sync maps a
+  `PARTIAL_SUCCESS` transaction to Send/Receive, so a partially successful
+  transaction shows as confirmed.
+
+The `txId` is the SDK's submission identifier, not the activity hash; match
+history by `activityHash`. A submission attempt consumes the transaction even when
+its outcome is uncertain. Prover progress shows actual emitted events, not invented
+percentages. HTTP provers may emit no events.
+
+Available history omits shielded-only rows;
+`getTxHistory` and `hintUsage` remain unimplemented. Per-account reset is a request,
+not an assertion that persistence was erased or sync completed. Token renaming
+uses public validators and preserves other metadata; native/reserved names remain
+uneditable. This app adds no connector injection or wallet-product features.
+
+### Checks and opt-in live validation
+
+Use Node `24.14.0`. After installing the packaged dependencies, run:
+
+```bash
+npm run typecheck
+npm run test:e2e -- tests/e2e/midnight.spec.ts tests/e2e/temenos-transport.spec.ts tests/e2e/runtime.spec.ts tests/e2e/midnight-startup.spec.ts
+npm test -- --test-timeout=60000
+npm run build
+npm run test:runtime:production
+SIGNER_DIST=<lace-platform>/apps/lace-passkey-signer/dist npm run test:e2e -- tests/e2e/passkey.spec.ts tests/e2e/custody.spec.ts
+```
+
+`E2E_PORT` retains the existing default 5198; interactive signer usage retains
+localhost:5173 and its allowed origins. The ordinary Midnight browser tests check
+route separation and cancellation without pretending to run a live wallet.
+Existing mocked Cardano tests are regression evidence, not live ledger proof.
+
+The live harness requires both `MIDNIGHT_LIVE=preview` and a private
+`MIDNIGHT_TEST_WALLET_FILE` outside this repository. Its schema is `mnemonicWords`
+(string array), `passwordHex` or `password` (nonempty session string),
+`network: "preview"`, `address` (expected public unshielded address), and optional
+`accountIndex` (default 0). Keep this file private and outside source control. The harness
+uses `parseTestWallet`, compares the derived address before signing, clears secret
+inputs and memory references, and disconnects at teardown. The live config disables
+trace, screenshots, video, git capture and automatic failure DOM snapshots. Keep
+these settings; never enable protocol/debug logging.
+
+Opt-in non-proving execution, after build/browser checks and review:
+
+```bash
+unset MIDNIGHT_LIVE_REGISTER MIDNIGHT_LIVE_TRANSFER
+MIDNIGHT_LIVE=preview MIDNIGHT_TEST_WALLET_FILE=/private/path/disposable-wallet.json \
+  npm run test:midnight:live -- tests/live/midnight-nonproving.live.spec.ts
+```
+
+This single test restores **one** wallet/instance and reuses it for cancellation,
+text/hex/base64 signing of a fixed harmless UTF-8 string, installed ledger public-key
+verification, DUST state, existing registration history/details, unsigned one-unit
+self-transfer fee estimation, native-token rename refusal, then bounded per-account
+resync. No transaction is built, registered, signed, proved or submitted. Only message
+signing is approved. Prover/relay and unrelated HTTP destinations are blocked before
+sending; an attempted forbidden request fails acceptance. The app uses its local
+prover selection for this run; that prover must never be contacted. No attestation
+retry or Temenos diagnostic cycle occurs.
+
+Forbidden HTTP and WebSocket destinations use a serialized negative URL filter;
+approved Preview streams use browser passthrough rather than forwarding their frames
+through the Playwright worker. A bounded installed-code fixture verifies this routing
+behavior. It does not establish why the interrupted live run stalled. Readiness waits
+now race stalled reads/pauses against their deadline; the live runner also has a
+35-minute global watchdog by default. The interrupted run did not establish any of
+its ten check outcomes.
+
+`midnight.live.spec.ts` now reads only public sync ratios, fixed startup stages and
+strict completion flags. Forward progress refreshes its inactivity deadline and
+extends the Playwright test timeout; ratio 1 alone never establishes readiness.
+The first recognized observation starts this budget; later extensions require
+forward progress. Callers without the explicit progress callback keep a fixed deadline.
+Unchanged/regressive ratios and repeated restarts do not reset the high-water mark
+within one wait. A later explicit restore gets fresh marks. Stalled reads/pauses
+and terminal failures still fail. Other operations retain the test-level bound.
+For the attended long-sync validation, `--global-timeout=0` removes only the fixed
+global cap, with an independent process watchdog for 35 minutes without forward
+public progress. Do not disable the per-test timeout. Capture settings remain off.
+The separate non-proving suite still has its own fixed 30-minute test timeout;
+it was not rerun or changed as part of this validation.
+
+The local transfer check uses the existing application option and requires separate
+authorization. Its previous run was reconciled as confirmed (transaction `02139e2c…2adace`);
+a rerun sends another transfer. Keep registration unset: the existing account is
+already registered.
+
+```bash
+unset MIDNIGHT_LIVE_REGISTER MIDNIGHT_LIVE_DIAGNOSTICS
+MIDNIGHT_LIVE=preview MIDNIGHT_LIVE_PROVER=local MIDNIGHT_LIVE_TRANSFER=own \
+  MIDNIGHT_TEST_WALLET_FILE=/private/path/disposable-wallet.json \
+  npm run test:midnight:live -- tests/live/midnight.live.spec.ts --grep 'packaged browser WASM:'
+```
+
+`MIDNIGHT_LIVE_PROVER` accepts only `local` or `temenos`; unset retains Temenos.
+Local selection first sends a wallet-free GET to `http://127.0.0.1:6300/version`,
+with redirects refused, a five-second deadline and a 256-byte response limit.
+It requires `8.1.3` as plain text, a JSON string, or the JSON `version` field.
+An unrecognized response fails before restore. Passing this version check alone
+does not establish successful proving or submission.
+There is no fallback or Temenos diagnostic retry. The transfer run reuses one restore,
+estimates and sends exactly one smallest NIGHT unit to the validated wallet address,
+and requires the Submission panel to reach `confirmed` for that exact activity hash;
+an SDK result alone is insufficient. An `uncertain` stage keeps waiting for history,
+and the panel and status text are attached to the report.
+
+The separate non-proving command requires REGISTER and TRANSFER unset. Its ten
+independent outcomes reuse one wallet and its resync stays last, after any transfer
+run has settled. The two suites use separate sessions to keep the non-proving
+checks isolated from transaction operations.
+Do not resync while a timed-out transaction may still be in flight; retain an uncertain
+transaction outcome and reconcile its identifier before scheduling resync.
+
+The attachment contains only ten fixed check outcomes, a blocked-request count and
+DUST presence/positive booleans. It excludes addresses, public keys, signatures,
+wallet serialization, raw errors and network contents. Failure, timeout, missing
+prerequisite and unrun checks stay distinct and fail overall acceptance. Resync
+requires observed cache clearing, a fresh Pending operation, a later successful sync,
+strict sub-wallet completion and unchanged address/keys. It runs last and is withheld
+if a signing/estimation timeout could leave work in flight. It tests recovery of the
+selected account; other-account survival remains a separate live check. Optional
+`decayTime`/`maxCapReachedAt` can legitimately be absent and are recorded as absent.
+
+The registration-history check matches the recorded public activity hash from the
+previously confirmed registration.
+A different disposable wallet needs its own confirmed registration evidence; absence
+is a prerequisite failure, never a fabricated registration or automatic retry.
+
+### Capabilities and validation limits
+
+All 18 public surfaces below are available in the installed package. Local tests
+cover contracts and synthetic failure cases; they do not establish live success.
+Prior checks reported type checks, 128 unit tests, production build, 18 browser
+tests and production address-codec probes passing. A later focused check reported
+32 tests passing, including rejection of a valid signature from the wrong account.
+Those checks are separate from the incomplete live validation below.
+
+| Capability / public access | Local coverage | Live observations and remaining validation |
+|---|---|---|
+| Restore/index: `createInMemoryWalletEntity`, `createMidnightAccounts` | Startup, indices, passkey | Indexed Preview restoration and deterministic nonzero index observed without spending. |
+| Networks: `selectMidnightNetwork`, config/selectors | Supported, missing and unsafe configuration | Preview endpoints observed; other networks and switching unrun. |
+| Addresses/keys: `addresses.selectByAccountId$`, `selectPublicKeysByAccountId$` | Address kinds, decoded keys, account selection | Three addresses observed; full per-account decoded-key comparison unrun. |
+| Tokens/DUST: token selectors, `observeMidnightBalances`, DUST selectors | Pending, absent and generation fields | NIGHT 5000000000 smallest units and positive generated/spendable DUST observed; generation-field checks incomplete. Non-native/shielded funding absent. |
+| Sync: `sync.selectSyncStatusByAccount$`, balance `synced` flags | Strict states and failures | Full sync observed; disconnect/failure variants incomplete. Rounded progress is insufficient. |
+| History/details: `activities.selectByAccountId$`, `loadActivityDetails`, `selectActivityDetails$` | Mapping and reconciliation | Confirmed own registration details and fee observed. Other send/receive/failure fixtures unrun; shielded-only rows omitted. |
+| Transfers/batches: `buildMidnightTransfers` | Outputs, empty/mixed batches, network, amounts, funds | Local 8.1.3 self-transfer confirmed on chain (`02139e2c…2adace`, block 1294134); that run's page did not report it (fixed since). Temenos one-unit self-transfers reached panel/history confirmation on 2026-10-16 with build `c19ed1f0ed` (`c5a4931b…63048c`) and the merged build `75c3de4267` (`4a9c4ce2…33c9a8`, second attempt); identifiers above. Multi-recipient/token and shielded runs need services and funding. |
+| DUST designation: `registerMidnightDust` | Eligibility, fees, no NIGHT, network, repeat | Own registration proved, submitted and confirmed. External destination and repeat/fee variants unrun; do not repeat completed registration. |
+| Unsigned fee: `estimateMidnightFee` | No signing, fee branches, insufficient DUST | Independent non-proving check incomplete; the fee a confirmed transfer consumed is not verified. |
+| Stages: `signMidnightTx`, `proveMidnightTx`, `submitMidnightTx` | Failures, timeouts, consumer consent, in-flight submission and history reconciliation | Registration stages confirmed. The earlier local transfer confirmed on chain while the page lost the identifier (cause unestablished). The 2026-10-16 Temenos runs observed page/history confirmation and SDK return for the exact activity hash. Transfer balance and fee consumption remain unverified. |
+| Progress: `proveMidnightTx.onProgress` | Actual events, concurrency, timeout | Registration completion and local transfer Proved observed. Concurrent live progress/timeout behavior unrun. |
+| Prover/TEE: `createAttestedProver`, config selectors | Routing, trust, refusal, cleanup | Five-phase browser attestation and encrypted proving succeeded on the aligned Preview deployment with verifier 0.3.0 on 2026-10-16 for both builds; transfers confirmed, no fallback. One attempt on the merged build received upstream HTTP 404/400 from the encrypted proxy and passed when run again; the earlier HTTP400 is historical evidence. Local 8.1.3 proving and a confirmed submission also observed. |
+| Resync: `midnightContext.resetSyncState` | Stop/delete/restart and failure isolation | Selected-account recovery check incomplete; other-account survival unrun. In-memory storage does not validate persisted adapters. |
+| Names: validators, `tokens.upsertTokenMetadata` | Rules and metadata preservation | Live native rename refusal incomplete; non-native rename/sync persistence needs a funded token/metadata fixture. |
+| Connector: sealed/unsealed balance, `makeMidnightTransfer`, `makeMidnightIntent` | Binding, mixed assets, fee opt-out, conditional signing | Real sealed/unsealed/intent fixtures and funded mixed assets absent. Helpers may sign/prove; excluded from non-proving checks. `intentId` ignored. |
+| Message signing: `signMidnightData` | Byte domain, signatures, account/options/errors, consent | Live text/hex/base64 verification, account-key binding and cancellation checks incomplete. |
+| Circuits/submission: `getMidnightProvingProvider`, `submitMidnightTx` | Key binding, routing, pending reconciliation | Real preimage/ZKIR/prover/verifier material and connector transaction fixtures absent; Temenos check unsupported. |
+| Instance isolation: SDK resolution/teardown | Same-ID providers, stop/reset/switch, lifecycle | Same-page instances with identical account IDs remained isolated across stop. Reset/network-switch live isolation unrun; one-instance checks cannot establish it. |
+
+### Remaining prerequisites
+
+- **Local transfer follow-up:** the local 8.1.3 transfer is confirmed on chain;
+  its balance change and fee consumption remain unverified. The corrected
+  submission reporting was observed in the 2026-10-16 Temenos live runs.
+- **Temenos scope:** the aligned Preview/verifier 0.3.0 self-transfer is confirmed on
+  the merged SDK build `75c3de4267`. This does not validate other deployments or
+  shielded/batch transfers, and does not establish the cause of the upstream HTTP
+  400/404 responses (historical, and once on 2026-10-16 before a passing run).
+- **Funding/fixtures:** shielded and non-native assets, recipient/token batches,
+  an external DUST destination with NIGHT and no generation capacity, connector
+  sealed/unsealed transactions, intent/mixed fee-opt-out inputs and real circuit
+  preimage/ZKIR/prover/verifier keys. Synthetic tests cannot establish these live results.
+- **State cases:** other-account reset survival, network switching/isolation,
+  supported networks unavailable on Preview, failure/disconnect history/sync
+  variants and persisted storage validation remain unrun or incomplete.
+
+Live restoration/isolation checks can be selected without transaction opt-ins:
+
+```bash
+unset MIDNIGHT_LIVE_REGISTER MIDNIGHT_LIVE_TRANSFER
+MIDNIGHT_LIVE=preview MIDNIGHT_TEST_WALLET_FILE=/private/path/disposable-wallet.json \
+  npm run test:midnight:live -- tests/live/midnight.live.spec.ts
+```
+
+Live failure, timeout, missing prerequisites and unrun checks remain distinct.
+The observations above do not establish an overall live pass.

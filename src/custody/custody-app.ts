@@ -30,7 +30,7 @@ import {
   type CardanoCustodyParsedAgentPolicy,
   type CardanoCustodySubmission,
   type WalletWithCardanoCustody,
-} from "@input-output-hk/lace-sdk/cardano";
+} from "@laceio/sdk/cardano";
 import { config, featureFlags } from "../config";
 import { signer, signerUrl, withSigner } from "../signer";
 import { parseAdaAmount } from "../accounts";

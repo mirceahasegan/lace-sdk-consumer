@@ -6,3 +6,8 @@ dist
 .npmrc
 test-results
 playwright-report
+
+# Supply these private build artifacts locally before installing dependencies.
+/vendor/laceio-sdk-0.1.0.tgz
+/vendor/input-output-hk-temenos-attestation-verifier-0.2.0.tgz
+/vendor/input-output-hk-temenos-attestation-verifier-0.3.0.tgz

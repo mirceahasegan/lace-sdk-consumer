@@ -9,7 +9,7 @@ import {
   m,
   createRemotePasskeyWalletEntity,
   type AccountId,
-} from "@input-output-hk/lace-sdk/cardano";
+} from "@laceio/sdk/cardano";
 import { config, featureFlags } from "./config";
 import { ui } from "./ui";
 import { bindingKey, readBinding } from "./binding";

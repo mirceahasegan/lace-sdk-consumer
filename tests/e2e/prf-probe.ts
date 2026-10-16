@@ -1,4 +1,4 @@
-import { createPasskeyKeySource } from "@input-output-hk/lace-sdk/cardano";
+import { createPasskeyKeySource } from "@laceio/sdk/cardano";
 
 document.getElementById("probe")!.addEventListener("click", async () => {
   const result = document.getElementById("result")!;

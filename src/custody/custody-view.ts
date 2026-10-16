@@ -1,4 +1,4 @@
-import type { CardanoCustodyAccountState, observeCardanoCustodyAccountState, observeCardanoCustodyGrantStatuses } from "@input-output-hk/lace-sdk/cardano";
+import type { CardanoCustodyAccountState, observeCardanoCustodyAccountState, observeCardanoCustodyGrantStatuses } from "@laceio/sdk/cardano";
 
 // Pure text views of custody state for the demo page. Types only come from
 // the SDK, so Node unit tests run this file without loading the SDK.

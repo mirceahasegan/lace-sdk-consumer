@@ -35,7 +35,7 @@ import {
 // share one SDK instance. Its bundled libsodium looks for `window` or `self`
 // before Node's crypto.
 (globalThis as { self?: unknown }).self ??= globalThis;
-const sdk = createRequire(import.meta.url)("@input-output-hk/lace-sdk/cardano") as typeof import("@input-output-hk/lace-sdk/cardano");
+const sdk = createRequire(import.meta.url)("@laceio/sdk/cardano") as typeof import("@laceio/sdk/cardano");
 const { Cardano, HexBlob, Serialization, CARDANO_CUSTODY_ACCOUNT_VALIDATOR_HASH, CARDANO_CUSTODY_LOGIC_HASH } = sdk;
 
 export const BLOCKFROST_ORIGIN = "https://cardano-preprod.blockfrost.io";

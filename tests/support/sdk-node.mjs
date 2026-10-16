@@ -5,7 +5,7 @@ import { createRequire } from "node:module";
 // them. Its bundled libsodium looks for `window` or `self` for a random
 // number generator before Node's crypto.
 globalThis.self ??= globalThis;
-const sdk = createRequire(import.meta.url)("@input-output-hk/lace-sdk/cardano");
+const sdk = createRequire(import.meta.url)("@laceio/sdk/cardano");
 
 export const {
   CARDANO_CUSTODY_ACCOUNT_VALIDATOR_HASH,
