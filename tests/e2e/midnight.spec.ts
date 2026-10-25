@@ -60,9 +60,9 @@ const submit = async () => {
   const mode = window.__submitMode ?? 'ok';
   return mode === 'held' ? new Promise(resolve => { window.__settleSubmit = settled => resolve(outcome(settled)); }) : outcome(mode);
 };
-// Each proof gets its own activity hash: the first ${HASH}, later ones ${HASH2}.
+// Each proof gets its own activity hash, in the opaque value's activityHash field: the first ${HASH}, later ones ${HASH2}.
 let proofs = 0;
-const prove = async () => { effects.push('prove'); const hash = proofs++ ? '${HASH2}' : '${HASH}'; return result({ mock: 'prove', transactionHash: () => hash }); };
+const prove = async () => { effects.push('prove'); const hash = proofs++ ? '${HASH2}' : '${HASH}'; return result({ mock: 'prove', activityHash: hash }); };
 export async function restore(words, password, config) {
   const accounts = ['account-0','account-7'].map(accountId => ({ accountId, blockchainName:'Midnight', blockchainNetworkId:'midnight-preview' }));
   const wallet = { dispatch(...args) { effects.push(args[0]); }, stateObservables: {

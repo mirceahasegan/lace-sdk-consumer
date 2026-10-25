@@ -100,8 +100,8 @@ export async function installStartupDiagnostics(page: Page) {
     await cdp.send('Debugger.enable');
     // The reviewed dev runtime was already optimized. Refuse stale/unavailable
     // anchors instead of claiming diagnostic coverage over a different bundle.
-    // The engine's startup lives in the SDK's sdk-init chunk and its account
-    // watcher in the watch chunk; each anchor must match exactly one line.
+    // The engine's startup and its account watcher live in the SDK's sdk-init
+    // or watch chunk; each anchor must match exactly one line across them.
     const names = (await readdir('node_modules/.vite/deps')).filter(name => /^(?:sdk-init|watch)-[\w-]+\.js$/.test(name));
     const chunks = await Promise.all(names.map(async name => [name, (await readFile(`node_modules/.vite/deps/${name}`, 'utf8')).split('\n')] as const));
     if (chunks.length === 0) throw new Error('Diagnostic bundle unavailable');

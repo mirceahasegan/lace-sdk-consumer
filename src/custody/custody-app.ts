@@ -30,7 +30,7 @@ import {
   type CardanoCustodyParsedAgentPolicy,
   type CardanoCustodySubmission,
   type WalletWithCardanoCustody,
-} from "@laceio/sdk/cardano";
+} from "@laceio/sdk/experimental";
 import { config, featureFlags } from "../config";
 import { signer, signerUrl, withSigner } from "../signer";
 import { parseAdaAmount } from "../accounts";
@@ -375,7 +375,7 @@ export function startCustody({
       if (policy.grantee !== agentKey.keyHash) throw new Error("The policy grants another key");
       // The agent runs its own wallet: no passkey, no device, no vault.
       const observer = await createLaceWallet({
-        modules: [m.featureDev, m.storageInMemory, m.blockchainCardano, m.cardanoProviderBlockfrost, m.cryptoCardanoSdk] as const,
+        modules: [m.featureDev, m.storageInMemory, m.blockchainCardano, m.blockchainCardanoCustody, m.cardanoProviderBlockfrost, m.cryptoCardanoSdk] as const,
         environment: "development",
         featureFlags,
         config,

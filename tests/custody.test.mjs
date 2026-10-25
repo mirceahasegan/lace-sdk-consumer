@@ -11,7 +11,7 @@ import {
   CardanoCustodyScriptDataHashError,
   CardanoCustodySponsorError,
   RemoteSignerError,
-} from "@laceio/sdk/cardano";
+} from "@laceio/sdk/experimental";
 import { custodyBalances, describeCustodyState, describeGrant, describeSponsorHealth, fingerprint, formatAda } from "../src/custody/custody-view.ts";
 import { describeCustodyError } from "../src/custody/custody-errors.ts";
 import { devKeyFromSecret, keyHashOf, verifyHashSignature } from "../src/custody/dev-key.ts";

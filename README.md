@@ -19,7 +19,7 @@ The superseded SDK was vendored as `vendor/input-output-hk-lace-sdk-0.1.0-fe9d70
 
    ```bash
    cd lace-sdk-consumer
-   shasum -a 256 vendor/laceio-sdk-0.1.0.tgz vendor/input-output-hk-temenos-attestation-verifier-0.3.0.tgz
+   shasum -a 256 vendor/laceio-sdk-0.0.0-development.tgz vendor/laceio-cardano-0.0.0-development.tgz vendor/input-output-hk-temenos-attestation-verifier-0.3.0.tgz
    npm ci
    test -e .env || cp .env.example .env
    ```
@@ -100,6 +100,15 @@ for the assertion package's browser utility dependency; it exposes no host value
 The wallet-free runtime probe exercises public dummy DUST, shielded and unshielded address
 codecs (including invalid input) in both dev and production builds.
 
+The SDK's Midnight guide ("Install") requires Node polyfills on the page:
+`@laceio/cardano` reads the `Buffer` global, and its dependencies read the
+`global` and `process` globals and import Node's `events` module.
+`vite.config.ts` adds them with `vite-plugin-node-polyfills`. It also sets
+`worker: { format: 'es' }`. `@laceio/sdk/midnight` names its Worker-mode
+SharedWorker script, so `vite build` bundles that worker even though this app
+runs the engine on the page. The ledger's WebAssembly uses top-level await,
+which only the ES worker format supports. This app does not use Worker mode.
+
 Keep the scoped `package.json` override from `wallet-sdk-address-format@3.1.2`
 to `@scure/base@2.2.0`, matching the Lace source baseline. Version 2.4.0 defaults
 to a 90-character decoding limit and rejects the 132-character Preview shielded
@@ -109,17 +118,72 @@ checksum, malformed shielded payload, wrong network and wrong address type.
 
 ### Packaged dependencies
 
-The two archives below are private build artifacts and are not committed. Before
+The three archives below are private build artifacts and are not committed. Before
 running `npm ci`, obtain them through the approved private build/package source
 and place them at these paths:
 
-- `vendor/laceio-sdk-0.1.0.tgz`
+- `vendor/laceio-sdk-0.0.0-development.tgz`
+- `vendor/laceio-cardano-0.0.0-development.tgz`
 - `vendor/input-output-hk-temenos-attestation-verifier-0.3.0.tgz`
 
 Keep these files local; `.gitignore` excludes them. Their pinned hashes below
 identify the artifacts used for the recorded checks.
 
-The installed canary package is the build of lace-platform `main` at `75c3de4267`, the
+The installed SDK is the canary build of lace-platform branch
+`feat/sdk-midnight-worker` (#2865) at `530fa46dfa3d23302ecc308bec2a9247d7e6e6fa`,
+built on 2026-10-25 with `npx nx build lace-sdk` and `npx nx build lace-cardano`.
+That build runs both SDK channels with all of the SDK's checks. Nx restored both
+builds from its local cache for that commit's inputs. The SDK tarball comes from
+`node apps/lace-sdk/scripts/pack.mjs --dist dist-canary --development`, and the
+`@laceio/cardano` tarball from `npm pack --ignore-scripts` in `apps/lace-cardano`.
+The installed packages match the tarballs file for file.
+
+- `@laceio/sdk@0.0.0-development`, **canary**, `vendor/laceio-sdk-0.0.0-development.tgz`.
+  SHA-256: `8edaefc60f8310b9b72c2095c455d9dd915c96b87b6df951e4997969fa314b1a`.
+- `@laceio/cardano@0.0.0-development`, the version the SDK depends on,
+  `vendor/laceio-cardano-0.0.0-development.tgz`.
+  SHA-256: `640bd387bad016449cee6a5d368fa37659942b8041aa586b1d665782e8d7699f`.
+- The Midnight entry's optional peers, as the SDK's Midnight guide lists them:
+  `@midnight-ntwrk/ledger-v8@8.1.0`, `@midnightntwrk/wallet-sdk@1.2.0`,
+  `@midnightntwrk/wallet-sdk-abstractions@2.1.0`,
+  `@midnightntwrk/wallet-sdk-address-format@3.1.2`, `@polkadot/api` and
+  `@polkadot/api-base` (`^16.5.4`), `@polkadot/util` (`^14.0.1`) and
+  `@subsquid/scale-codec` (`^4.0.1`).
+- The experimental entry's Passport peers (`@midnight-ntwrk/compact-runtime`
+  0.20 and others) are not installed. This app uses no Passport account. Vite
+  replaces those imports with modules that throw when they load, and `vite build`
+  warns about them (`IMPORT_IS_UNDEFINED`).
+- Consumer-local `@input-output-hk/temenos-attestation-verifier@0.3.0`
+  (artifact and hash below). Its own `@midnight-ntwrk/compact-runtime` 0.15 now
+  installs under the verifier, because the SDK declares 0.20 as an optional peer.
+  The runtime probe therefore loads that runtime's WebAssembly through
+  `@midnight-ntwrk/onchain-runtime-v3`, whose `ContractState` it re-exports.
+- These packages are local and unpublished.
+
+The Cardano route imports the SDK from `@laceio/sdk/experimental`, the canary
+entry that holds Cardano Shared Custody. Its wallets load
+`m.blockchainCardanoCustody` for the custody store and side effects. That entry
+also re-exports `@laceio/sdk/cardano`, so the page builds its wallet from one
+entry, as the SDK's `MAINTAINING.md` ("Stable and Canary Builds") prescribes.
+The Midnight route imports `@laceio/sdk/midnight`. Both resolve the same
+package. No configuration alias targets SDK source.
+
+Validation on 2026-10-25 against this build, in page mode, after
+`rm -rf node_modules && npm ci`: `npm run typecheck` passed;
+`npm run test:e2e -- tests/e2e/runtime.spec.ts` passed 1/1 and filled the Vite
+cache; `npm test` passed 144/144; `npm run build` passed; `npm run test:e2e`
+passed 23/23, the passkey and custody specs included; and
+`npm run test:runtime:production` passed 1/1. The browser suite served a signer
+built from the same lace-platform commit with
+`VITE_CUSTODY_ALLOWED_ORIGINS=http://localhost:5198` (`index.html` SHA-256
+`b8b406a94c5216cb126ca223cb4a609cd6f94b5c3ed74fcb8e654375f4512987`). The key
+isolation check in [HOSTED-SIGNER.md](HOSTED-SIGNER.md#key-isolation) also passed.
+The live Midnight suites were not run against this build: they need Preview.
+
+#### Earlier canary build `75c3de4267`
+
+The previously installed canary package, `vendor/laceio-sdk-0.1.0.tgz`, is the build
+of lace-platform `main` at `75c3de4267`, the
 merge of PR #2875, packed with the SDK's `scripts/pack.mjs` from a canary build on
 2026-10-16 13:12 CEST; that build ran both channels with all of the SDK's checks. The
 SDK artifact and installed SDK code were not modified: the installed package matches
@@ -128,7 +192,7 @@ and uses verifier 0.3.0. The behavioral pin test exercises the public SDK factor
 synthetic verifier and checks its selected Preview config against the relay; it also
 rejects the old Preprod proof URL.
 
-Validation on 2026-10-16 against this build: type-check and production build passed;
+Validation on 2026-10-16 against that build: type-check and production build passed;
 144 unit tests passed (0 failed/skipped) once a browser check had populated the Vite
 cache (see *Start*); `playwright-report/checks-75c3de4267-20261016.log` records them,
 and `sdk-build-75c3de4267-20261016.log` and `sdk-pack-75c3de4267-20261016.json` there
@@ -175,9 +239,10 @@ passed, 0 blocked requests) against the earlier canary build `6f084a708c` (SHA-2
   `@input-output-hk/temenos-attestation-verifier@0.3.0` (artifact/hash below).
 - This package is local and unpublished.
 
-Both Cardano and Midnight resolve this same SDK version through the public
-`@laceio/sdk/cardano` and `@laceio/sdk/midnight` entries. No configuration alias
-targets SDK source. The old tarball is retained for historical Cardano validation.
+With that build, both Cardano and Midnight resolved the SDK through the public
+`@laceio/sdk/cardano` and `@laceio/sdk/midnight` entries. Its archive and the
+older `vendor/input-output-hk-lace-sdk-0.1.0-fe9d709f7.tgz` are kept for these
+historical records; nothing installs them.
 
 ### Configuration and prerequisites
 
@@ -325,7 +390,7 @@ record stores its hash before the SDK call and then reports one of:
 | `confirmed` | A history row with the hash appeared (Self/Send/Receive). This holds even if the SDK call is still pending or later fails. |
 | `failed-on-chain` | History lists the hash as Failed. |
 | `uncertain` | The SDK returned an error after the transaction may have been broadcast. Check history or the chain for the hash before retrying; a later history row still confirms it. |
-| `failed` | The SDK failed while resolving the account's engine, before sending anything. A later history row for the hash still overrides it. |
+| `failed` | The SDK failed while resolving the account's engine, or refused a transaction built before that engine restarted or was reset (`MidnightStaleTxError`), before sending anything. A later history row for the hash still overrides it. |
 
 Limitations:
 
@@ -344,7 +409,9 @@ Limitations:
   transaction shows as confirmed.
 
 The `txId` is the SDK's submission identifier, not the activity hash; match
-history by `activityHash`. A submission attempt consumes the transaction even when
+history by `activityHash`. The page reads the hash from the proved transaction's
+`activityHash` field: the SDK's transaction values are opaque and have no ledger
+methods. A submission attempt consumes the transaction even when
 its outcome is uncertain. Prover progress shows actual emitted events, not invented
 percentages. HTTP provers may emit no events.
 
@@ -366,6 +433,10 @@ npm run build
 npm run test:runtime:production
 SIGNER_DIST=<lace-platform>/apps/lace-passkey-signer/dist npm run test:e2e -- tests/e2e/passkey.spec.ts tests/e2e/custody.spec.ts
 ```
+
+Build that signer from the lace-platform commit of the installed SDK, with
+`VITE_CUSTODY_ALLOWED_ORIGINS=http://localhost:5198`, as
+[HOSTED-SIGNER.md](HOSTED-SIGNER.md#verification) shows.
 
 `E2E_PORT` retains the existing default 5198; interactive signer usage retains
 localhost:5173 and its allowed origins. The ordinary Midnight browser tests check

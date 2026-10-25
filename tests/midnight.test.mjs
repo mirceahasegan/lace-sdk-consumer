@@ -50,7 +50,8 @@ test('failure consumes consent, requires a new review', async () => {
 // Submission completion. The SDK call can outlive its own timeout or fail after broadcast;
 // history keyed by the proved transaction's hash is the authority for confirmation.
 const HASH = '02139e2c375c7089aa5c60a90193a1578f25c64d8edd85edbb7cdd271b2adace';
-const proved = { transactionHash: () => HASH };
+// A proved transaction is an opaque value; its activityHash field is the hash history lists.
+const proved = { transaction: new Uint8Array(), activityHash: HASH };
 const deferred = () => { let resolve, reject; const promise = new Promise((res, rej) => { resolve = res; reject = rej; }); return { promise, resolve, reject }; };
 const timeoutError = () => Object.assign(new Error('Timeout has occurred'), { name: 'TimeoutError' });
 function irrevocableSubmission(tracker, submit) {
@@ -132,7 +133,7 @@ test('submission-completion: cancel during an in-flight submission is refused an
   assert.equal(gate.invalidate(), true, 'cancellation works again once settled');
 });
 test('submission-completion: pre-broadcast failures still show failed', async () => {
-  for (const code of ['midnight-account-not-found', 'midnight-network-not-configured', 'midnight-wallet-not-ready']) {
+  for (const code of ['midnight-account-not-found', 'midnight-network-not-configured', 'midnight-wallet-not-ready', 'midnight-stale-tx']) {
     const tracker = new SubmissionTracker();
     const { settled } = irrevocableSubmission(tracker, async () => { throw Object.assign(new Error('engine unavailable'), { code }); });
     const final = await settled;
@@ -140,7 +141,7 @@ test('submission-completion: pre-broadcast failures still show failed', async ()
     assert.match(final.summary, /failed before broadcast: engine unavailable/);
   }
   const tracker = new SubmissionTracker(); let calls = 0;
-  const final = await submitTracked(tracker, context.accountId, { transactionHash: () => { throw new Error('not a proved transaction'); } }, async () => { calls++; return { txId: 'x' }; });
+  const final = await submitTracked(tracker, context.accountId, { transaction: new Uint8Array() } /* a recipe: no activityHash */, async () => { calls++; return { txId: 'x' }; });
   assert.equal(final.stage, 'failed');
   assert.equal(final.activityHash, undefined);
   assert.equal(calls, 0, 'nothing is submitted without an activity hash');
@@ -162,7 +163,7 @@ test('submission-completion: history overrides a failure classified as pre-broad
   untyped.settle(HASH, { txId: 'node-tx-4' });
   assert.equal(untyped.state.summary, `Confirmed: history lists transaction ${HASH} (txId node-tx-4).`);
   const noHash = new SubmissionTracker();
-  await submitTracked(noHash, context.accountId, { transactionHash: () => { throw new Error('not proved'); } }, async () => ({ txId: 'x' }));
+  await submitTracked(noHash, context.accountId, { transaction: new Uint8Array() }, async () => ({ txId: 'x' }));
   noHash.observeHistory(context.accountId, [{ activityId: undefined, type: 'Self' }]);
   assert.equal(noHash.state.stage, 'failed', 'a failure without a hash has nothing to match');
 });
@@ -171,7 +172,7 @@ test('submission-completion: only the newest or in-flight record is announced; b
   const H2 = 'c'.repeat(64);
   await submitTracked(tracker, 'account-7', proved, async () => { throw timeoutError(); });
   assert.ok(events.every(event => event.announce), 'the in-flight and newest record is announced');
-  await submitTracked(tracker, 'account-7', { transactionHash: () => H2 }, async () => ({ txId: 'node-tx-5' }));
+  await submitTracked(tracker, 'account-7', { transaction: new Uint8Array(), activityHash: H2 }, async () => ({ txId: 'node-tx-5' }));
   events.length = 0;
   tracker.observeHistory('account-7', [{ activityId: HASH, type: 'Self' }]);
   assert.deepEqual(events, [{ hash: HASH, stage: 'confirmed', announce: false, listed: [H2, HASH] }]);
@@ -191,7 +192,7 @@ test('submission-completion: uncertain H1, then H2: H1 stays listed and a later 
   await submitTracked(tracker, context.accountId, proved, async () => { throw timeoutError(); });
   assert.equal(tracker.find(H1).stage, 'uncertain');
   assert.deepEqual(tracker.unresolved.map(r => r.activityHash), [H1]);
-  await submitTracked(tracker, context.accountId, { transactionHash: () => H2 }, async () => ({ txId: 'node-tx-h2' }));
+  await submitTracked(tracker, context.accountId, { transaction: new Uint8Array(), activityHash: H2 }, async () => ({ txId: 'node-tx-h2' }));
   assert.deepEqual(tracker.records.map(r => [r.activityHash, r.stage]), [[H2, 'submitted'], [H1, 'uncertain']]);
   assert.deepEqual(changes.at(-1).all.map(r => r.activityHash), [H2, H1], 'the rendered list keeps H1');
   tracker.observeHistory(context.accountId, [{ activityId: H1, type: 'Failed' }]);

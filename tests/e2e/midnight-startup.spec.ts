@@ -102,14 +102,15 @@ test('startup probe observes synthetic breakpoints and emits no raw exception da
   // Keep the optimized file's line layout, but execute ONLY inert fixture code.
   // This tests CDP binding, pause/resume and error projection without a wallet.
   await page.route('**/*', route => ['localhost', '127.0.0.1'].includes(new URL(route.request().url()).hostname) ? route.continue() : route.abort());
-  // The engine's startup anchors are in the SDK's sdk-init chunk and the account
-  // watcher's in its watch chunk; both must be served inert and loaded in order.
+  // The engine's startup anchors sit in the SDK's sdk-init or watch chunk (the
+  // current SDK build has them in watch), and the account watcher's in its watch
+  // chunk. Each chunk that holds one is served inert, the startup one first.
   const findBundles = async () => {
     const names = (await readdir('node_modules/.vite/deps').catch(() => [] as string[])).filter(name => /^(?:sdk-init|watch)-[\w-]+\.js$/.test(name));
     const entries = await Promise.all(names.map(async name => ({ name, source: await readFile(`node_modules/.vite/deps/${name}`, 'utf8') })));
-    const startup = entries.find(entry => entry.name.startsWith('sdk-init-') && entry.source.includes('walletFacade = facade;'));
+    const startup = entries.find(entry => entry.source.includes('walletFacade = facade;'));
     const watch = entries.find(entry => entry.name.startsWith('watch-') && entry.source.includes('Account watch failure:'));
-    return startup && watch ? [startup, watch] : undefined;
+    return startup && watch ? [...new Set([startup, watch])] : undefined;
   };
   let bundles = await findBundles();
   if (!bundles) {

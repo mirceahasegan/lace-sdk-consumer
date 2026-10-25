@@ -53,13 +53,14 @@ test('real packaged balance observable routes selection, missing registry and pr
   const { of } = require('rxjs');
   const accountId = 'private synthetic account';
   const account = { accountId, accountType: 'InMemory', blockchainName: 'Midnight', blockchainNetworkId: 'midnight-preview' };
-  // The SDK reaches the engine registry through the loadMidnightEngine addon; a loadout without the
-  // engine module yields no registry.
+  // The SDK reaches the engine registry through the loadMidnightEngine addon, which yields the
+  // engine access: requestEngine, startFailures$ and the registry as engines$. A loadout without
+  // the engine module yields no access.
   const makeWallet = (network, registry) => ({ stateObservables: {
     wallets: { selectAll$: of([{ accounts: [account] }]) },
     network: { selectAllActiveNetworkIds$: of([network]) },
     midnightContext: {},
-  }, _loadModules: async () => (registry ? [of(registry)] : []) });
+  }, _loadModules: async () => (registry ? [{ requestEngine: () => {}, startFailures$: of({}), engines$: of(registry) }] : []) });
   const engine = { accountId, state: () => of({}), syncProgress$: of({}), address$: of({}) };
   for (const [wallet, kind, category] of [
     [makeWallet('midnight-preprod'), 'MidnightAccountNotFoundError', 'account-not-found'],

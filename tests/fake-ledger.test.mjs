@@ -4,7 +4,7 @@ import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { beforeEach, test } from "node:test";
 import { blake2b } from "@noble/hashes/blake2.js";
-import { CARDANO_CUSTODY_ACCOUNT_VALIDATOR_HASH, CARDANO_CUSTODY_LOGIC_HASH, Cardano, Serialization } from "@laceio/sdk/cardano";
+import { CARDANO_CUSTODY_ACCOUNT_VALIDATOR_HASH, CARDANO_CUSTODY_LOGIC_HASH, Cardano, Serialization } from "@laceio/sdk/experimental";
 import { FakeLedger, LOGIC_REWARD_ACCOUNT, PARKED_SCRIPTS } from "./e2e/fake-ledger.ts";
 import { devKeyFromSecret } from "../src/custody/dev-key.ts";
 
@@ -192,7 +192,7 @@ test("refuses a script that is neither attached nor referenced, an attached scri
 
 test("serves the account proxy and logic version 1 from the parked Preprod UTxOs the SDK references", () => {
   assert.deepEqual(new Set(PARKED_SCRIPTS.map(({ scriptHash }) => scriptHash)), new Set([CARDANO_CUSTODY_ACCOUNT_VALIDATOR_HASH, CARDANO_CUSTODY_LOGIC_HASH]));
-  const dist = join(dirname(createRequire(import.meta.url).resolve("@laceio/sdk/cardano")));
+  const dist = join(dirname(createRequire(import.meta.url).resolve("@laceio/sdk/experimental")));
   const bundles = readdirSync(dist).filter((name) => name.endsWith(".cjs")).map((name) => readFileSync(join(dist, name), "utf8"));
   for (const parked of PARKED_SCRIPTS) {
     // The SDK package carries the same output reference and script bytes.

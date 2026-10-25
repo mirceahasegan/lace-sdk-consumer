@@ -14,17 +14,23 @@
   },
   "dependencies": {
     "@input-output-hk/temenos-attestation-verifier": "file:vendor/input-output-hk-temenos-attestation-verifier-0.3.0.tgz",
-    "@laceio/sdk": "file:vendor/laceio-sdk-0.1.0.tgz",
+    "@laceio/cardano": "file:vendor/laceio-cardano-0.0.0-development.tgz",
+    "@laceio/sdk": "file:vendor/laceio-sdk-0.0.0-development.tgz",
     "@midnight-ntwrk/ledger-v8": "8.1.0",
     "@midnightntwrk/wallet-sdk": "1.2.0",
     "@midnightntwrk/wallet-sdk-abstractions": "2.1.0",
     "@midnightntwrk/wallet-sdk-address-format": "3.1.2",
     "@noble/curves": "^2.4.0",
     "@noble/hashes": "^2.4.0",
+    "@polkadot/api": "^16.5.4",
+    "@polkadot/api-base": "^16.5.4",
+    "@polkadot/util": "^14.0.1",
+    "@subsquid/scale-codec": "^4.0.1",
     "assert": "2.1.0",
     "buffer": "^6.0.3",
     "typescript": "^5.9.3",
-    "vite": "^8.3.3"
+    "vite": "^8.3.3",
+    "vite-plugin-node-polyfills": "^0.28.0"
   },
   "overrides": {
     "@midnightntwrk/wallet-sdk-address-format@3.1.2": {

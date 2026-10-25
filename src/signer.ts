@@ -1,4 +1,4 @@
-import { createRemotePasskeySigner } from "@laceio/sdk/cardano";
+import { createRemotePasskeySigner } from "@laceio/sdk/experimental";
 
 export const signerUrl = import.meta.env.VITE_PASSKEY_SIGNER_URL || "https://passkey-preview.lace.io";
 if (new URL(signerUrl).protocol !== "https:") {

@@ -9,7 +9,7 @@ import {
   m,
   createRemotePasskeyWalletEntity,
   type AccountId,
-} from "@laceio/sdk/cardano";
+} from "@laceio/sdk/experimental";
 import { config, featureFlags } from "./config";
 import { ui } from "./ui";
 import { bindingKey, readBinding } from "./binding";
@@ -35,6 +35,8 @@ const wallet = await createLaceWallet({
     m.featureDev,
     m.storageInMemory,
     m.blockchainCardano,
+    // Custody's actions, state and side effects. The custody flow below runs on this wallet.
+    m.blockchainCardanoCustody,
     m.cardanoProviderBlockfrost,
     m.cryptoCardanoSdk,
     signer.cardanoVaultModule,

@@ -9,7 +9,10 @@ async function probe() {
   const sdk = await import('@laceio/sdk/midnight');
   const verifier = await import('@input-output-hk/temenos-attestation-verifier');
   const ledger = await import('@midnight-ntwrk/ledger-v8');
-  const compact = await import('@midnight-ntwrk/compact-runtime');
+  // The verifier's compact-runtime re-exports this package's ContractState.
+  // npm installs that compact-runtime under the verifier, because the SDK
+  // declares a newer one as an optional peer, so load the runtime it wraps.
+  const compact = await import('@midnight-ntwrk/onchain-runtime-v3');
   const zkir = await import('@midnight-ntwrk/zkir-v2');
   const module = sdk.createMidnightModule({ password: new Uint8Array() });
   const loaded = await Promise.all([

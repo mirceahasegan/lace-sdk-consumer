@@ -4,7 +4,7 @@ import {
   FEATURE_FLAG_NETWORK_TYPE,
   Milliseconds,
   AppConfig,
-} from "@laceio/sdk/cardano";
+} from "@laceio/sdk/experimental";
 
 // --- Config (mirrors apps/lace-extension/src/util/config.ts) ---
 

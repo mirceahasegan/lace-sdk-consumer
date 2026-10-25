@@ -6,19 +6,19 @@ The consumer installs the Lace SDK as an `npm pack` tarball, never as a `file:` 
 
 | Item | Value |
 | --- | --- |
-| Platform source | `lace-platform` PR #2825, commit `fe9d709f71dcb1d9f134c095568850c55450a5c0` ("docs(lw-15692,lw-15693): add ADR 65 and the custody key-material threat model"). Its tree is the same as the published `0.1.0-dev.11`. |
+| Platform source | `lace-platform` branch `feat/sdk-midnight-worker` (#2865), commit `530fa46dfa3d23302ecc308bec2a9247d7e6e6fa`, the canary SDK build |
 | Custody contract | Revision [`b48545f`](https://github.com/Biglup/cardano-account-custody-contract/tree/b48545f4be850c1044de2dbeb51751718b4b8e70): account proxy `CARDANO_CUSTODY_ACCOUNT_VALIDATOR_HASH`, logic version 1 `CARDANO_CUSTODY_LOGIC_HASH`, both parked on Preprod |
 | Fee sponsor | `https://sponsor-preprod.lw.iog.io`, sponsor `4de7a38` |
 | Toolchain | Node 24.14.0 |
-| SDK tarball | `vendor/input-output-hk-lace-sdk-0.1.0-fe9d709f7.tgz` |
-| Tarball SHA-256 | `24acbaaa934613f7b27abb3c116281660dd622f912868aa6c4af1e4de8b9b9e9` |
-| Signer build for the browser suite | `lace-passkey-signer` at `fe9d709f7`, built with `VITE_CUSTODY_ALLOWED_ORIGINS=http://localhost:5198`; `dist/index.html` SHA-256 `88264fb948442d22c1c830eafd83de5ee7e59c2c178608e936a47c33f9cbeb34` |
-| Deployed preview signer | `https://passkey-preview.lace.io` serves the same build, apart from its custody origins (`http://localhost:5173,https://midnight.city`) and its asset file names. This was checked on its main script, not on its other chunks. |
+| SDK tarballs | `vendor/laceio-sdk-0.0.0-development.tgz` and `vendor/laceio-cardano-0.0.0-development.tgz` |
+| Tarball SHA-256 | SDK `8edaefc60f8310b9b72c2095c455d9dd915c96b87b6df951e4997969fa314b1a`; `@laceio/cardano` `640bd387bad016449cee6a5d368fa37659942b8041aa586b1d665782e8d7699f` |
+| Signer build for the browser suite | `lace-passkey-signer` at `530fa46dfa`, built with `VITE_CUSTODY_ALLOWED_ORIGINS=http://localhost:5198`; `dist/index.html` SHA-256 `b8b406a94c5216cb126ca223cb4a609cd6f94b5c3ed74fcb8e654375f4512987` |
+| Deployed preview signer | `https://passkey-preview.lace.io` was checked against the earlier signer build at `fe9d709f7` (its main script, apart from its custody origins `http://localhost:5173,https://midnight.city` and its asset file names). It has not been checked against `530fa46dfa`. |
 
-The tarball is committed under `vendor/`, and `package.json` and `package-lock.json` install it from there, so `npm ci` reproduces the dependency on any machine. Check its hash before you install:
+The tarballs are private build artifacts and are not committed: `.gitignore` excludes them, and [README.md](README.md#packaged-dependencies) says how to obtain them. `package.json` and `package-lock.json` install them from `vendor/`. Check their hashes before you install:
 
 ```bash
-sha256sum vendor/input-output-hk-lace-sdk-0.1.0-fe9d709f7.tgz
+shasum -a 256 vendor/laceio-sdk-0.0.0-development.tgz vendor/laceio-cardano-0.0.0-development.tgz
 npm ci
 ```
 
@@ -80,7 +80,7 @@ E2E_PORT=5198 \
 npm run test:e2e
 ```
 
-Build the signer with the browser suite's origin in its custody list, from the lace-platform checkout of the commit above:
+Build the signer with the browser suite's origin in its custody list, from the lace-platform checkout of the installed SDK's commit ([README.md](README.md#packaged-dependencies) names it):
 
 ```bash
 cd apps/lace-passkey-signer
@@ -160,11 +160,13 @@ The `grep` must print `0`.
 
 ### Evidence
 
-On October 9, 2026, with the tarball and signer build above and Vite 8.3.3:
+On October 9, 2026, with the historical SDK tarball and signer build at `fe9d709f7` ([README.md](README.md#historical-cardano-baseline-package)) and Vite 8.3.3:
 
 - `npm run typecheck` passed, `npm test` passed 50 tests, and `npm run build` passed.
 - `npm run test:e2e` with `E2E_PORT=5198` passed 4 tests, including the custody flow. In that run the creation drew 5,900,000 lovelace from the sponsor's fee UTxO: a 795,925 lovelace fee, the 2 ADA stake deposit and a 3,104,075 lovelace control output. The 2 ADA grant spend paid a 745,281 lovelace fee from the account. 2,745,281 lovelace left the account, and the grant's caps fell by 2,755,281 lovelace. The fake ledger's fixed script budgets set these fees, not Preprod's evaluation. Every submission matched the script integrity hash the fake ledger computes.
 - The key isolation check found neither `test-marker-0000` nor `SPONSOR_API_KEY` in the 175 files of `dist`. A build with `VITE_SPONSOR_API_KEY` set stopped with an error. A build under `DEBUG=vite:*` printed Vite's resolved env but not the marker key.
 - The app's `vite.config.ts`, run with a dummy key and no env files, relayed `GET /sponsor/health` to the hosted sponsor, which answered `{"ok":true,"network":"preprod","pool":{"fee":{"free":99,"leased":0},"collateral":{"shared":true,"spare":3,"consumed":0}}}`. The relay answered `GET /sponsor//x/health` and `GET /sponsor/admin/keys` with 404 itself, and a cross-site `POST /sponsor/v1/leases` with 403.
+
+On October 25, 2026, `npm run test:e2e` passed 23 of 23 tests, the passkey and custody specs included, with the SDK and a signer built from lace-platform `530fa46dfa`; [README.md](README.md#packaged-dependencies) records the run. The custody flow drew the same amounts as above.
 
 No custody transaction has run against the hosted sponsor or landed on Preprod from this consumer yet.

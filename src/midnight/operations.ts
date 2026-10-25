@@ -71,8 +71,11 @@ type HistoryRow = Readonly<{ activityId?: unknown; type?: unknown }>;
 
 /** Stages whose outcome is not yet known from history or a pre-broadcast failure. */
 export const UNRESOLVED_STAGES: readonly SubmissionRecord['stage'][] = ['submitting', 'submitted', 'uncertain'];
-/** SDK error codes raised while resolving the account's engine, before any transaction is sent. */
-export const PRE_BROADCAST_ERROR_CODES: readonly string[] = ['midnight-account-not-found', 'midnight-network-not-configured', 'midnight-wallet-not-ready'];
+/**
+ * SDK error codes raised before any transaction is sent: while resolving the account's engine,
+ * or when refusing a transaction built before that engine restarted or was reset.
+ */
+export const PRE_BROADCAST_ERROR_CODES: readonly string[] = ['midnight-account-not-found', 'midnight-network-not-configured', 'midnight-wallet-not-ready', 'midnight-stale-tx'];
 const isPreBroadcast = (error: unknown) =>
   !!error && typeof error === 'object' && PRE_BROADCAST_ERROR_CODES.includes(String((error as { code?: unknown }).code));
 const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error)).split('\n')[0]!.slice(0, 300);
@@ -173,19 +176,23 @@ export class SubmissionTracker {
 }
 
 /**
- * Runs one approved submission and reports it through the tracker. The activity hash is
- * recorded before the SDK call; errors after that point are reported as uncertain unless
- * the SDK identifies them as raised before broadcast. Never throws.
+ * Runs one approved submission and reports it through the tracker. The activity hash, the
+ * proved transaction's `activityHash` field, is recorded before the SDK call; errors after
+ * that point are reported as uncertain unless the SDK identifies them as raised before
+ * broadcast. A value without the field, such as an unproved recipe, is never submitted.
+ * Never throws.
  */
 export async function submitTracked(
   tracker: SubmissionTracker,
   accountId: string,
-  transaction: { transactionHash(): string },
+  transaction: { readonly activityHash?: unknown },
   submit: () => Promise<{ txId: string }>,
 ): Promise<SubmissionRecord> {
-  let activityHash: string;
-  try { activityHash = transaction.transactionHash(); }
-  catch (error) { tracker.failBeforeBroadcast(accountId, error); return tracker.state; }
+  const activityHash = transaction.activityHash;
+  if (typeof activityHash !== 'string' || !activityHash) {
+    tracker.failBeforeBroadcast(accountId, new Error('The transaction has no activity hash; prove it before submitting.'));
+    return tracker.state;
+  }
   tracker.begin(accountId, activityHash);
   try { tracker.settle(activityHash, { txId: (await submit()).txId }); }
   catch (error) { tracker.settle(activityHash, { error }); }
