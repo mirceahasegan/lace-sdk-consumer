@@ -58,7 +58,7 @@ export class OperationGate {
  * that hash settles the record whatever the SDK call later returns.
  */
 export type SubmissionRecord = Readonly<{
-  stage: 'idle' | 'submitting' | 'submitted' | 'uncertain' | 'failed' | 'confirmed' | 'failed-on-chain';
+  stage: 'idle' | 'submitting' | 'submitted' | 'uncertain' | 'interrupted' | 'failed' | 'confirmed' | 'failed-on-chain';
   summary: string;
   accountId?: string;
   activityHash?: string;
@@ -66,19 +66,53 @@ export type SubmissionRecord = Readonly<{
   historyType?: string;
   sdk?: 'pending' | 'returned' | 'error';
   error?: string;
+  /** The SDK error's `code`, when it has one. */
+  errorCode?: string;
 }>;
 type HistoryRow = Readonly<{ activityId?: unknown; type?: unknown }>;
 
 /** Stages whose outcome is not yet known from history or a pre-broadcast failure. */
-export const UNRESOLVED_STAGES: readonly SubmissionRecord['stage'][] = ['submitting', 'submitted', 'uncertain'];
+export const UNRESOLVED_STAGES: readonly SubmissionRecord['stage'][] = ['submitting', 'submitted', 'uncertain', 'interrupted'];
 /**
- * SDK error codes raised before any transaction is sent: while resolving the account's engine,
- * or when refusing a transaction built before that engine restarted or was reset.
+ * SDK error codes raised before any transaction is sent, as the SDK's Midnight guide lists them:
+ * while resolving the account's engine; when refusing a transaction built before that engine
+ * restarted or was reset; and in Worker mode, when the worker is not supported, did not start,
+ * refused this page's settings or ended before the page handed it the transaction, or when a
+ * reset of the account refused the submission.
  */
-export const PRE_BROADCAST_ERROR_CODES: readonly string[] = ['midnight-account-not-found', 'midnight-network-not-configured', 'midnight-wallet-not-ready', 'midnight-stale-tx'];
-const isPreBroadcast = (error: unknown) =>
-  !!error && typeof error === 'object' && PRE_BROADCAST_ERROR_CODES.includes(String((error as { code?: unknown }).code));
+export const PRE_BROADCAST_ERROR_CODES: readonly string[] = [
+  'midnight-account-not-found', 'midnight-network-not-configured', 'midnight-wallet-not-ready', 'midnight-stale-tx',
+  'midnight-worker-unsupported', 'midnight-worker-startup-failed', 'midnight-settings-conflict', 'midnight-worker-stopped', 'midnight-engine-reset',
+];
+/** Worker mode: the worker ended after the page handed it the transaction. The SDK never submits it again. */
+export const INTERRUPTED_ERROR_CODE = 'midnight-submit-interrupted';
+const codeOf = (error: unknown): string | undefined => {
+  const code = !!error && typeof error === 'object' ? (error as { code?: unknown }).code : undefined;
+  return typeof code === 'string' && /^midnight-[a-z-]+$/.test(code) ? code : undefined;
+};
+const isPreBroadcast = (error: unknown) => PRE_BROADCAST_ERROR_CODES.includes(codeOf(error) ?? '');
 const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error)).split('\n')[0]!.slice(0, 300);
+/**
+ * A short label for an SDK error: its class name and its `code`, such as
+ * `MidnightWorkerStoppedError [midnight-worker-stopped]`. Both are fixed SDK strings, so the
+ * label is safe to show where the message is withheld. Undefined for an error without a code.
+ */
+export function sdkErrorLabel(error: unknown): string | undefined {
+  const code = codeOf(error);
+  if (!code) return undefined;
+  const name = (error as { name?: unknown }).name;
+  return typeof name === 'string' && /^Midnight[A-Za-z]*Error$/.test(name) ? `${name} [${code}]` : `[${code}]`;
+}
+/** What to do about a Worker-mode error, by its code. */
+export const WORKER_ERROR_HINTS: Readonly<Record<string, string>> = {
+  'midnight-worker-unsupported': 'This browser cannot run Worker mode (it needs module SharedWorkers, Web Locks and a secure context). Restore with the engine on this page.',
+  'midnight-worker-startup-failed': 'The worker did not start. The next call tries once more.',
+  'midnight-worker-stopped': 'The worker ended. The next call starts a new one; build transactions again.',
+  'midnight-settings-conflict': 'Another tab runs this account\'s engine with other settings. Clear the session and restore with the same settings, or with "Use the running engine\'s settings".',
+  'midnight-engine-reset': 'A reset of this account cut the call off. Build the transaction again once the reset has run.',
+  'midnight-stale-tx': 'The transaction was built before the engine restarted or was reset. Build it again.',
+  'midnight-submit-interrupted': 'The worker ended before it reported the outcome. The transaction may still reach the chain and is not submitted again. Check history before you submit again.',
+};
 const IDLE: SubmissionRecord = Object.freeze({ stage: 'idle', summary: 'No submission attempted.' });
 
 const historySummary = (stage: 'confirmed' | 'failed-on-chain', activityHash: string, historyType: string | undefined, txId?: string) => {
@@ -120,7 +154,8 @@ export class SubmissionTracker {
   }
   /** Records a failure before anything was sent. */
   failBeforeBroadcast(accountId: string, error: unknown, activityHash?: string) {
-    this.put({ stage: 'failed', accountId, ...(activityHash ? { activityHash } : {}), sdk: 'error', error: errorText(error),
+    const errorCode = codeOf(error);
+    this.put({ stage: 'failed', accountId, ...(activityHash ? { activityHash } : {}), sdk: 'error', error: errorText(error), ...(errorCode ? { errorCode } : {}),
       summary: `Submission failed before broadcast: ${errorText(error)}. Nothing was sent; prepare again.` });
   }
   /** Records the SDK's settled result for that hash; ignored unless its call is still pending. */
@@ -132,13 +167,21 @@ export class SubmissionTracker {
         ? { ...current, txId: outcome.txId, sdk: 'returned', summary: historySummary(current.stage, activityHash, current.historyType, outcome.txId) }
         : { ...current, stage: 'submitted', txId: outcome.txId, sdk: 'returned',
           summary: `Submitted: the SDK returned txId ${outcome.txId}. Awaiting history confirmation of hash ${activityHash}.` });
-    } else if (current.stage === 'confirmed' || current.stage === 'failed-on-chain') {
-      this.put({ ...current, sdk: 'error', error: errorText(outcome.error) });
-    } else if (isPreBroadcast(outcome.error)) {
-      this.failBeforeBroadcast(current.accountId!, outcome.error, activityHash);
     } else {
-      this.put({ ...current, stage: 'uncertain', sdk: 'error', error: errorText(outcome.error),
-        summary: `Submission uncertain: check history/chain for hash ${activityHash} before retrying. The SDK reported: ${errorText(outcome.error)}.` });
+      const errorCode = codeOf(outcome.error);
+      const failure = { sdk: 'error' as const, error: errorText(outcome.error), ...(errorCode ? { errorCode } : {}) };
+      if (current.stage === 'confirmed' || current.stage === 'failed-on-chain') {
+        this.put({ ...current, ...failure });
+      } else if (isPreBroadcast(outcome.error)) {
+        this.failBeforeBroadcast(current.accountId!, outcome.error, activityHash);
+      } else if (errorCode === INTERRUPTED_ERROR_CODE) {
+        // The SDK keeps its Pending activity and never submits the transaction again; neither does this page.
+        this.put({ ...current, stage: 'interrupted', ...failure,
+          summary: `Outcome unknown: the Midnight worker ended before it reported the outcome of hash ${activityHash}. It may still reach the chain and is not submitted again; check history/chain for this hash before you submit again.` });
+      } else {
+        this.put({ ...current, stage: 'uncertain', ...failure,
+          summary: `Submission uncertain: check history/chain for hash ${activityHash} before retrying. The SDK reported: ${errorText(outcome.error)}.` });
+      }
     }
     this.reconcile(activityHash);
   }
@@ -217,4 +260,29 @@ export function parseOutputs(text: string): [TransferOutput, ...TransferOutput[]
 export function parseHex(value: string): Uint8Array {
   if (!/^(?:[0-9a-fA-F]{2})*$/.test(value)) throw new Error('Expected even-length hexadecimal bytes.');
   return Uint8Array.from(value.match(/../g) ?? [], byte => parseInt(byte, 16));
+}
+
+/** How one `submitMidnightTx` promise settled, by fixed names and codes only: no message, no value. */
+export type SubmitBoundary = { settled: 'fulfilled' | 'rejected'; isErr?: boolean; errorName?: string; errorCode?: string; interruptedError?: boolean };
+/**
+ * Test-only. When a test has set `sink` (the page passes `window.__laceSubmitBoundary`) to an array before the app
+ * loads, records whether the SDK's promise fulfilled, with an `Ok` or an `Err`, or rejected. The SDK returns its
+ * errors through `Result`, so a rejection is a contract breach that the tracker alone could not tell apart: it
+ * catches both. Without a sink this does nothing, and the caller awaits the same promise either way.
+ */
+export function observeSubmitBoundary(
+  sink: unknown,
+  pending: Promise<{ isErr(): boolean; error?: unknown }>,
+  interrupted: abstract new (...args: never[]) => Error,
+): void {
+  if (!Array.isArray(sink)) return;
+  const entries = sink as SubmitBoundary[];
+  const named = (error: unknown) => {
+    const name = (error as { name?: unknown } | undefined)?.name, errorCode = codeOf(error);
+    return { ...(typeof name === 'string' ? { errorName: name.slice(0, 80) } : {}), ...(errorCode ? { errorCode } : {}), interruptedError: error instanceof interrupted };
+  };
+  pending.then(
+    result => { entries.push(result.isErr() ? { settled: 'fulfilled', isErr: true, ...named(result.error) } : { settled: 'fulfilled', isErr: false }); },
+    (error: unknown) => { entries.push({ settled: 'rejected', ...named(error) }); },
+  );
 }

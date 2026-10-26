@@ -104,10 +104,14 @@ The SDK's Midnight guide ("Install") requires Node polyfills on the page:
 `@laceio/cardano` reads the `Buffer` global, and its dependencies read the
 `global` and `process` globals and import Node's `events` module.
 `vite.config.ts` adds them with `vite-plugin-node-polyfills`. It also sets
-`worker: { format: 'es' }`. `@laceio/sdk/midnight` names its Worker-mode
-SharedWorker script, so `vite build` bundles that worker even though this app
-runs the engine on the page. The ledger's WebAssembly uses top-level await,
-which only the ES worker format supports. This app does not use Worker mode.
+`worker: { format: 'es' }`: `@laceio/sdk/midnight` names its Worker-mode
+SharedWorker script, so `vite build` bundles that worker in both engine modes,
+and the worker loads the ledger's WebAssembly with top-level await, which only
+the ES worker format supports. For Worker mode on the development server it
+pre-bundles `@subsquid/scale-codec` (`optimizeDeps.include`): Vite serves the
+SDK's worker files without converting CommonJS, and the worker imports that
+CommonJS package from this app's install. The ledger stays out of pre-bundling,
+as before. These are the settings of the guide's "Worker mode" → "Bundlers".
 
 Keep the scoped `package.json` override from `wallet-sdk-address-format@3.1.2`
 to `@scure/base@2.2.0`, matching the Lace source baseline. Version 2.4.0 defaults
@@ -115,6 +119,79 @@ to a 90-character decoding limit and rejects the 132-character Preview shielded
 address strings used by SDK transfer/connector parsing. Install with the matching
 lockfile; the shared probe checks string parse/decode/re-encode and rejects a bad
 checksum, malformed shielded payload, wrong network and wrong address type.
+
+### Worker mode
+
+The restore form's **Engine** setting chooses where the account's engine runs:
+
+- **This page** (the default): the engine syncs, builds, signs, proves and
+  submits on the page, as before.
+- **SharedWorker (Worker mode)**: the page passes `worker: { storage, adopt }`
+  to `createMidnightModule`, and the SDK runs the engine in one SharedWorker
+  that every tab of this origin shares. **Worker storage** is `memory` (the
+  worker keeps the synced state while it runs; the next start syncs again) or
+  `indexeddb`. **Use the running engine's settings** sets `adopt`: a tab that
+  restores an account whose engine another tab already runs with other
+  endpoints, proof server or storage then uses that engine's settings instead
+  of failing with `MidnightWorkerSettingsConflictError`.
+
+Worker mode proves only through a proof server URL, here the local proof server
+`http://127.0.0.1:6300`: the SDK cannot run the Temenos attested prover in its
+worker and `createMidnightModule` throws `MidnightAttestedProverUnsupportedError`
+for the combination. The page refuses Temenos with Worker mode before it restores
+anything ("Restore refused: …"). The configuration panel shows the engine
+location after restore.
+
+The **Page responsiveness** field at the top is a scratch text field outside
+every form. Typing there echoes the text below it, so you can see the page stay
+usable while the engine syncs. The text is never stored or sent, and typing does
+not clear the session or discard a prepared operation.
+
+The page names the SDK's errors by class and `code`, for example
+`MidnightWorkerSettingsConflictError [midnight-settings-conflict]`, in the status
+line and, when the error ends the account's balance stream, in the readiness
+panel, with what to do about Worker-mode codes; the readiness panel still
+withholds the error's message, as before. The status line announces a failed
+balance stream or sync once, so the outcome of a later operation stays visible.
+After a Worker-mode error the account's streams end and the SDK
+retries nothing. **Observe this account again** subscribes again; that call
+starts a new worker if the old one ended.
+
+Two tabs that restore the same wallet in Worker mode share one engine, and
+closing one leaves the other working. A sync reset in one tab resets the
+account for both: a transfer the other tab built before the reset is refused
+(`MidnightStaleTxError`, or `MidnightEngineResetError` while the reset runs).
+The SDK guide's "Worker mode" section describes the rest; this app follows it.
+
+**Fixed SDK issue on the development server.** Earlier SDK builds, up to
+`19eebf02c6` (tarball `8edaefc6…4b1a`), evaluated the worker's entry module twice
+under `npm run dev`: Vite loads the SharedWorker script as
+`midnight-worker.js?worker_file&type=module`, and the SDK's own worker chunks
+imported `./midnight-worker.js` back, which Vite served under another URL. Each
+copy started its own runtime and engine host, so a second tab started a second
+engine for the same account instead of attaching, got no settings conflict, and
+did not see a reset in the first tab. The production build was not affected.
+`961ef2c2fa` fixed it in the SDK's worker build, and the installed build keeps
+that fix: no worker chunk imports the entry, and the SDK's build refuses one that
+does. The tab scenarios now pass on the development server as well
+([Worker mode, live](#worker-mode-live)). This app never worked around it.
+
+**Fixed SDK issue: engine error messages in Worker mode.** Up to `961ef2c2fa`
+(tarball `8c7d6414…e1bb`), an engine error that crossed the worker reached the
+page with an empty message: the wallet SDK rejects with Effect's `FiberFailure`,
+whose `toJSON()` drops the message, and the worker's messaging sent only that
+form. A failed submission then read "The SDK reported: ." `3ce36fb837` fixed it,
+and the installed build keeps that fix: it keeps the engine's name, message and
+`code`, and adds the wallet SDK's serialized error as `cause`. For a submission
+this app shows the message's first line, at most 300 characters, in the
+Submission record and the status line; other operations show the message in the
+status line. It never shows `cause`, which can hold the transaction's bytes.
+
+The circuit control (**Prove / check a circuit**) accepts a protocol circuit,
+a key location starting with `midnight/`, with all three keys empty: the page's
+key-material lookup then fails and the SDK uses the proof server's built-in
+material, as the guide's "dApp connector primitives" section describes. In
+Worker mode the page looks the material up and the worker calls the proof server.
 
 ### Packaged dependencies
 
@@ -130,19 +207,74 @@ Keep these files local; `.gitignore` excludes them. Their pinned hashes below
 identify the artifacts used for the recorded checks.
 
 The installed SDK is the canary build of lace-platform branch
-`feat/sdk-midnight-worker` (#2865) at `530fa46dfa3d23302ecc308bec2a9247d7e6e6fa`,
-built on 2026-10-25 with `npx nx build lace-sdk` and `npx nx build lace-cardano`.
-That build runs both SDK channels with all of the SDK's checks. Nx restored both
-builds from its local cache for that commit's inputs. The SDK tarball comes from
+`feat/sdk-midnight-worker` (#2865, PR #3021) at
+`68e9ff5aaa5b580c95c0a01219ee2a95864e77e9`: the Worker-mode work in two commits
+(`b498c96f1c`, the feature, and `68e9ff5aaa`, its documentation), on
+`main` at `c1964ab520c927f7afdd3314d9c143c55ca855e6`. It keeps the two SDK
+fixes above, first made on the branch before it was rebased in
+`961ef2c2fa90e1eba84929a40bd41555ce3d462d` (the worker's build for Vite's
+development server) and `3ce36fb8372012a2848b478928549d3da2a43aa9` (the message
+of engine errors that cross the worker). Since the build of
+`fc48f479d2b298faab5dc4df12d5ee1328d1b4b7`, Worker mode changed in five ways.
+An engine that failed is not replaced while one of its submissions is
+unsettled, and it refuses new submissions with `MidnightStaleTxError`. A
+submission that no running engine took returns `MidnightStaleTxError` and
+removes its Pending row. The derivation of the Pending row is bounded as in page
+mode, and the wait for finality is timed from the post. The worker builds one
+state view per engine, with the balances and the sync flags of one state, and
+sends it at most every 500 ms; `observeMidnightBalances` reads `synced` from
+that state. And the worker no longer keeps records of pages that closed. The
+build of `fc48f479d2` had added, since the build of
+`97b206f67b98afeb6a37944deec15e8fa84f7982`, that the end of a worker shows as a
+failed sync for each account it ran. The build after those five (a local build,
+SDK SHA-256 `94aa91843e6fb9e64b2b79eca8b11fed74e9b1228cca44af18cffe3af9a693b4`)
+was followed by six more changes, which the installed build has. A client's
+channel in the worker takes one port at a time, and none until the worker has
+answered the page's handshake; a closed client's id is refused until the host
+has detached it. A call's proving progress reaches only the client that made the
+call, under a random operation id. After a worker died, a reset or a resync
+through the next worker lets the accounts' engines start again. A bulk resync
+whose clear fails restarts the engines, counts no reset and fails. A value's
+origin is checked before its bytes are decoded. And the worker's engine load is
+bounded at 60 s, and a lost runtime lock ends the worker like a load failure;
+the notice the worker posts is now `lace-midnight-engine:worker-failed`.
+The installed build was made on 2026-10-29 with `npx nx build lace-sdk` and
+`npx nx build lace-cardano`.
+That runs both channels with all of the SDK's checks. The SDK tarball comes from
 `node apps/lace-sdk/scripts/pack.mjs --dist dist-canary --development`, and the
 `@laceio/cardano` tarball from `npm pack --ignore-scripts` in `apps/lace-cardano`.
-The installed packages match the tarballs file for file.
+The installed packages match the tarballs file for file. The previous SDK
+tarballs: the local build before this one, SHA-256
+`94aa91843e6fb9e64b2b79eca8b11fed74e9b1228cca44af18cffe3af9a693b4`; before it,
+the build of `fc48f479d2`, SHA-256
+`1848e47eea4e31662a79437b2064f0a716ae5860b1710229fab10762c6297754`; before it,
+the build of `97b206f67b`, SHA-256
+`bdeba2f71b76fe9457b15f27c467c9b8af9a0a0b857f85c5413ee762d97cd659`; before it,
+the build of `3ce36fb837`, SHA-256
+`21fd09a2c3f3230b5b5db26b3f0637b0694018ede5f8dfe6a50fec7205d6c1e2`; before it,
+the build of `961ef2c2fa`, SHA-256
+`8c7d64144bf65bdf0b9df53fd54dfe506ef145d6112c524171e5af6fe96fe1bb` (packed from
+the change before it was committed and from the commit, byte-identical); before
+it, the build of `530fa46dfa3d23302ecc308bec2a9247d7e6e6fa` and of
+`19eebf02c6c2c95bc1c3501eceb23af2eb9d1518` (byte-identical), SHA-256
+`8edaefc60f8310b9b72c2095c455d9dd915c96b87b6df951e4997969fa314b1a`. The
+`@laceio/cardano` tarball of this build differs from the previous one, SHA-256
+`42f1aec40c6b01d86ac77080c0ab31e655ae9f2f7e4df350a39b2aee7a6e811a`, in chunk
+names and in the `//#region` comments that name sources, since `main` moved
+`packages/lib/util/src/common` to `packages/lib/cardano-util/src`; its code and
+its `package.json` are the same. The previous tarball was byte-identical to the
+builds of `fc48f479d2` and `97b206f67b`. It had changed with the first rebase,
+for the first time since `530fa46dfa`: only its `package.json` differed, which
+pinned `main`'s `ip-address` 10.7.4 and `pbkdf2` 3.1.7 (10.2.0 and 3.1.5
+before). The earlier `@laceio/cardano` tarball, from `530fa46dfa` to
+`3ce36fb837`, had SHA-256
+`640bd387bad016449cee6a5d368fa37659942b8041aa586b1d665782e8d7699f`.
 
 - `@laceio/sdk@0.0.0-development`, **canary**, `vendor/laceio-sdk-0.0.0-development.tgz`.
-  SHA-256: `8edaefc60f8310b9b72c2095c455d9dd915c96b87b6df951e4997969fa314b1a`.
+  SHA-256: `8cec1fc5c640b8002cce85308ffc7616746cf99698cfb4ca3e49ad03186ed980`.
 - `@laceio/cardano@0.0.0-development`, the version the SDK depends on,
   `vendor/laceio-cardano-0.0.0-development.tgz`.
-  SHA-256: `640bd387bad016449cee6a5d368fa37659942b8041aa586b1d665782e8d7699f`.
+  SHA-256: `9a0e931e80ee6848d0eca07a05e21361794986b6ce3c2acb1e59a58968eb1b98`.
 - The Midnight entry's optional peers, as the SDK's Midnight guide lists them:
   `@midnight-ntwrk/ledger-v8@8.1.0`, `@midnightntwrk/wallet-sdk@1.2.0`,
   `@midnightntwrk/wallet-sdk-abstractions@2.1.0`,
@@ -168,17 +300,35 @@ entry, as the SDK's `MAINTAINING.md` ("Stable and Canary Builds") prescribes.
 The Midnight route imports `@laceio/sdk/midnight`. Both resolve the same
 package. No configuration alias targets SDK source.
 
-Validation on 2026-10-25 against this build, in page mode, after
-`rm -rf node_modules && npm ci`: `npm run typecheck` passed;
-`npm run test:e2e -- tests/e2e/runtime.spec.ts` passed 1/1 and filled the Vite
-cache; `npm test` passed 144/144; `npm run build` passed; `npm run test:e2e`
+Validation on 2026-10-25 against the previous build (`530fa46dfa`, SDK tarball
+`8edaefc6…4b1a`), in page mode, after `rm -rf node_modules && npm ci`:
+`npm run typecheck` passed; `npm run test:e2e -- tests/e2e/runtime.spec.ts`
+passed 1/1 and filled the Vite cache; `npm test` passed 144/144; `npm run build` passed; `npm run test:e2e`
 passed 23/23, the passkey and custody specs included; and
 `npm run test:runtime:production` passed 1/1. The browser suite served a signer
 built from the same lace-platform commit with
 `VITE_CUSTODY_ALLOWED_ORIGINS=http://localhost:5198` (`index.html` SHA-256
 `b8b406a94c5216cb126ca223cb4a609cd6f94b5c3ed74fcb8e654375f4512987`). The key
 isolation check in [HOSTED-SIGNER.md](HOSTED-SIGNER.md#key-isolation) also passed.
-The live Midnight suites were not run against this build: they need Preview.
+The page-mode live Midnight suites were not run against that build: they need
+Preview. On 2026-10-26, with the build of `3ce36fb837` and after
+`rm -rf node_modules && npm ci`, the same checks passed again, with this app's
+Worker-mode checks added since: `npm test` 153/153 and `npm run test:e2e` 26/26,
+with the same signer build. Later on 2026-10-26, with the build of
+`97b206f67b` and after `rm -rf node_modules && npm ci`, they passed again:
+`npm test` 153/153, and `npm run test:e2e` 26/26 with a signer built from
+`97b206f67b` with `VITE_CUSTODY_ALLOWED_ORIGINS=http://localhost:5198`
+(`index.html` SHA-256
+`fd82296636ea70e3dd08fea7c894716c63d9bc9e6f15ad3392e63e62412eeaaa`). The rebase
+changed the signer's source, so the `530fa46dfa` signer build no longer matches
+the installed commit. On 2026-10-27, with the build of `fc48f479d2` and after
+`rm -rf node_modules && npm ci`, they passed again: `npm test` 153/153, and
+`npm run test:e2e` 26/26 with the same `97b206f67b` signer build, since
+`fc48f479d2` does not change the signer's source. On 2026-10-29, with the
+installed build (`68e9ff5aaa`) and after `rm -rf node_modules && npm ci`, they
+passed again: `npm test` 153/153, and `npm run test:e2e` 26/26 with the same
+signer build, since `68e9ff5aaa` does not change the signer's source either.
+Worker mode's validation is under [Worker mode, live](#worker-mode-live).
 
 #### Earlier canary build `75c3de4267`
 
@@ -390,7 +540,8 @@ record stores its hash before the SDK call and then reports one of:
 | `confirmed` | A history row with the hash appeared (Self/Send/Receive). This holds even if the SDK call is still pending or later fails. |
 | `failed-on-chain` | History lists the hash as Failed. |
 | `uncertain` | The SDK returned an error after the transaction may have been broadcast. Check history or the chain for the hash before retrying; a later history row still confirms it. |
-| `failed` | The SDK failed while resolving the account's engine, or refused a transaction built before that engine restarted or was reset (`MidnightStaleTxError`), before sending anything. A later history row for the hash still overrides it. |
+| `interrupted` | Worker mode: the worker ended after the page handed it the transaction and before it reported the outcome (`MidnightSubmitInterruptedError`). The outcome is unknown: the transaction may still reach the chain, the SDK keeps its Pending activity and never submits it again, and neither does the page. A later history row still resolves it. |
+| `failed` | The SDK failed while resolving the account's engine, or refused a transaction built before that engine restarted or was reset (`MidnightStaleTxError`), before sending anything. In Worker mode also: no worker support, a worker that did not start, a settings conflict, a worker that ended before the page handed it the transaction (`MidnightWorkerStoppedError`), or a reset that refused the submission (`MidnightEngineResetError`). A later history row for the hash still overrides it. |
 
 Limitations:
 
@@ -427,7 +578,7 @@ Use Node `24.14.0`. After installing the packaged dependencies, run:
 
 ```bash
 npm run typecheck
-npm run test:e2e -- tests/e2e/midnight.spec.ts tests/e2e/temenos-transport.spec.ts tests/e2e/runtime.spec.ts tests/e2e/midnight-startup.spec.ts
+npm run test:e2e -- tests/e2e/midnight.spec.ts tests/e2e/midnight-worker.spec.ts tests/e2e/temenos-transport.spec.ts tests/e2e/runtime.spec.ts tests/e2e/midnight-startup.spec.ts
 npm test -- --test-timeout=60000
 npm run build
 npm run test:runtime:production
@@ -538,6 +689,315 @@ The registration-history check matches the recorded public activity hash from th
 previously confirmed registration.
 A different disposable wallet needs its own confirmed registration evidence; absence
 is a prerequisite failure, never a fabricated registration or automatic retry.
+
+### Worker mode, live
+
+`playwright.midnight-worker-live.config.ts` (`npm run test:midnight:worker:live`)
+runs `tests/live/midnight-worker.live.spec.ts` twice: project `dev` against the Vite development server (port 5196,
+`WORKER_LIVE_DEV_PORT`), and project `preview` against `vite build`, built into
+`dist-worker-live/`, served by `vite preview` (port 5197, `WORKER_LIVE_PREVIEW_PORT`).
+It keeps the live suite's settings: no trace, screenshots, video or git capture,
+one Playwright worker and no retries. Its JSON report goes to
+`playwright-report/midnight-worker-live.json`, or to `WORKER_LIVE_JSON`. Its
+attachments hold no secrets: hashes, counts, fixed SDK labels, timings,
+connection URLs, and the page's own text, that is the status line, readiness,
+configuration and submission panels, which include the account id and SDK
+error messages.
+The `preview` project also loads the production build's Cardano route once, with
+every request to another origin refused.
+
+`MIDNIGHT_LIVE` takes `preview` or `undeployed`. `undeployed` is the local chain
+of lace-platform's `compose/midnight.yml`: node `http://localhost:9944` and
+indexer `http://localhost:8088/api/v4/graphql`, which the scenarios enter as
+custom endpoints. Its wallet file has the same keys as the Preview one, with
+`network: "undeployed"` and an `mn_addr_undeployed…` address: for example the
+chain's genesis-funded development wallet, which lace-platform's
+`apps/lace-extension-shell/e2e/specs/30-midnight-dapp-local.spec.ts` uses. The
+local chain starts from genesis, so the first scenario that spends registers that
+wallet's NIGHT for DUST through the page. Nothing registers on Preview. Worker
+mode needs `MIDNIGHT_LIVE_PROVER=local`: each scenario checks the proof server's
+`/version` (8.1.3) before any wallet starts, and Temenos is refused.
+
+The transfer on Preview: Worker mode on, memory storage, restore, a strictly
+synced balance at the supplied address, then build → sign → prove → submit of
+one smallest NIGHT unit to the wallet's own address, until the SDK returns its
+`txId` at finality and history lists the hash as `Self`. It also checks that the
+worker, not the page, reached the node, the indexer and the proof server, and
+that the transfer was submitted once. It types into the Page responsiveness
+field and checks the echo, and records whether the engine was still syncing at
+that moment (`syncingWhileTyping`); it does not fail when sync finished first,
+which can happen on the fast local chain. Each command sends one transfer per
+server, so two:
+
+```bash
+MIDNIGHT_LIVE=preview MIDNIGHT_LIVE_PROVER=local \
+  MIDNIGHT_TEST_WALLET_FILE=/private/path/disposable-wallet.json \
+  npx playwright test --config playwright.midnight-worker-live.config.ts
+```
+
+On the local chain, from lace-platform's root start the node and the indexer
+(`docker compose -f compose/midnight.yml up --detach --wait node indexer`; its
+own proof-server service is not needed when a proof server already listens on
+`127.0.0.1:6300`), then from this directory:
+
+```bash
+export MIDNIGHT_LIVE=undeployed MIDNIGHT_LIVE_PROVER=local \
+  MIDNIGHT_TEST_WALLET_FILE=/private/path/undeployed-genesis-wallet.json
+# Every scenario, on both servers:
+npx playwright test --config playwright.midnight-worker-live.config.ts
+# Interrupted submit only:
+npx playwright test --config playwright.midnight-worker-live.config.ts --grep 'Interrupted submit'
+# The tab and other scenarios only:
+npx playwright test --config playwright.midnight-worker-live.config.ts --grep 'tabs:|unsupported browser|proving provider|connector:|engine load failure'
+```
+
+Stop the chain with `docker compose -f compose/midnight.yml down`. The local
+scenarios:
+
+- **The transfer** as above, on the local chain.
+- **Two tabs share one engine**: a second tab of the same browser restores the
+  same wallet and attaches to the engine the first runs, in the one SharedWorker
+  (still one worker, and as many open indexer subscriptions as with one tab: a
+  second engine would hold its own set open, while a reconnect only replaces a
+  socket); closing the first tab leaves the second working.
+- **Settings conflict**: a second tab with another worker storage gets
+  `MidnightWorkerSettingsConflictError`, then attaches with **Use the running
+  engine's settings** (`adopt`).
+- **Shared reset**: a sync reset in one tab resets the engine for both; the other
+  tab's transfer built before it is refused, and a new one signs.
+- **Unsupported browser**: with `SharedWorker` removed before the app loads,
+  restore returns the wallet controls; the balance stream and every later
+  engine-dependent operation report `MidnightWorkerUnsupportedError`, no worker
+  starts and the page does not run the engine itself.
+- **Proving provider**: a dApp's unproven transaction, one shielded output to
+  sample public keys built by the ledger in Node, gives a real
+  `midnight/zswap/output` preimage. The circuit control checks and proves it with
+  the proof server's built-in material, through the worker, and the proof
+  completes the dApp's transaction in the ledger.
+- **Connector balancing**: `balanceMidnightUnsealedTransaction` balances, signs
+  and proves a dApp's unbalanced transaction (one smallest NIGHT unit to the
+  wallet's own address, no inputs, no fee) in the worker; it is then submitted
+  and the indexer lists it.
+- **Engine load failure**: the worker's engine chunk request fails once
+  (DevTools Protocol `Fetch`, since Playwright's routing does not see a
+  SharedWorker's requests); the page gets `MidnightWorkerStartupError`, the worker
+  closes, and **Observe this account again** starts a new worker that syncs.
+- **Interrupted submit**: after a control transfer, the worker is paused by the
+  DevTools Protocol at the wallet SDK's broadcast call, right after the submit
+  request reached it; its paused task is terminated
+  (`Runtime.terminateExecution`), so nothing is broadcast, and the worker is
+  closed with `Target.closeTarget`. The page gets
+  `MidnightSubmitInterruptedError` through the `Result`, shows `interrupted`,
+  and the SDK's Pending row stays. "Through the `Result`" is checked at the SDK
+  call itself: the scenario sets `window.__laceSubmitBoundary` to an array
+  before the app loads, and the page then records, by name and code only,
+  whether each `submitMidnightTx` promise fulfilled with an `Ok` or an `Err` or
+  rejected (`observeSubmitBoundary` in `src/midnight/operations.ts`; without the
+  array it does nothing). The scenario requires that no promise rejected and
+  that the interrupted one fulfilled with an `Err` holding
+  `MidnightSubmitInterruptedError`. The next call starts a new worker. From
+  Node, the indexer lists the control transaction and not the interrupted one
+  after five more blocks, the node's pool is empty, and the workers sent one
+  submission in all: the control's.
+
+The scenarios read the workers through a browser-level DevTools Protocol session
+(`tests/live/worker-cdp.ts`): Playwright has no SharedWorker API, and its routing
+does not see a SharedWorker's requests. Chromium keeps a SharedWorker that ends
+while a DevTools session is attached to it, and connects the same page's next
+`new SharedWorker` to that dead worker, so the helper detaches before it closes a
+worker, and the engine-load scenario observes without attaching.
+
+Validation on 2026-10-29 with the installed SDK (`68e9ff5aaa`), after
+`rm -rf node_modules && npm ci`, with Chromium from Playwright 1.63, the local
+chain of lace-platform `compose/midnight.yml` (node 0.22.5, indexer 4.0.1) and
+proof server 8.1.3:
+
+- `npm run typecheck`, `npm test` (153/153), `npm run build`, `npm run test:e2e`
+  (26/26, the three Worker-mode browser checks included, with the signer built
+  from `97b206f67b` named above) and `npm run test:runtime:production` (1/1)
+  passed; so did the key isolation check.
+- The interrupted submit with the check at the SDK call
+  (`--grep 'Interrupted submit'`, on a chain fresh from genesis): 2/2. On both
+  servers every `submitMidnightTx` promise fulfilled, none rejected, and the
+  interrupted one fulfilled with an `Err` holding
+  `MidnightSubmitInterruptedError`; the Pending row stayed, the indexer listed
+  the control once and the interrupted transaction not at all after five more
+  blocks, and the pool was empty. After the worker closed, the page reported the
+  account's sync as failed; the failure cleared once the new worker had synced
+  the account.
+- Every scenario on the local chain, on both servers (the command without
+  `--grep`), on the same chain right after: 19 passed, none failed, and the
+  Cardano route was skipped on the development server, as designed. That
+  includes the transfer on the local chain (restore, sync, build, sign, prove,
+  submit and finality, with the balances read at `synced` showing NIGHT and DUST
+  available), the three two-tab scenarios on both servers (one worker, 3 open
+  indexer subscriptions with one tab and with two; the settings conflict, then
+  adopt; the shared reset, then `MidnightStaleTxError` for the other tab's
+  earlier transfer), the connector balancing, the proving provider, the engine
+  that fails to load (the page ended with `midnight-worker-startup-failed`, the
+  worker closed and the next call started a new one), and the interrupted submit
+  again on both servers, with the same counts. The node rejected no transaction
+  in either run.
+- Every run passed the first time; no rerun was made.
+- The transfer on Preview was not run with this build, and the 6/6 recorded for
+  `97b206f67b` below was run on that build, so it is not a result for this one;
+  its six transactions are unchanged. Since then, Worker mode's submit path and
+  its worker changed. Three changes were made in the build of `fc48f479d2` and
+  the one after it. A submission that was refused before any engine took it
+  returns `MidnightStaleTxError` and removes its Pending row. The Pending-row
+  step is bounded, and the wait for finality starts at the post. The worker
+  throttles the state view, and the balances and their `synced` flags come from
+  one state. The installed build changed six more things (listed under
+  [Packaged dependencies](#packaged-dependencies)): the worker's one port at a
+  time per client and its handshake gate, the proving progress that reaches only
+  the client that made the call, the restart of engines by a reset or a resync
+  after a worker's death, the failed bulk resync, the check of a value's origin
+  before it is decoded, and the 60 s bound on the engine load with the lost
+  runtime lock. The local runs above cover some of this and not all. The
+  transfer and the control transfer of the interrupted submit were submitted and
+  returned at finality on both servers, and the interrupted submit's outcome
+  reached the caller through the `Result`; the balances and their `synced` flags
+  came from one state. Both tabs' stream channels connected through the new port
+  gate in the two-tab, settings and reset scenarios, and the transfers and the
+  connector balancing passed values through the origin check; the shared reset
+  refused the other tab's earlier transfer with `MidnightStaleTxError` when it
+  was signed. The engine load failure ended the page's stream with
+  `midnight-worker-startup-failed` and closed the worker, by the failure path
+  that posts the renamed notice; the scenario does not read the notice. No local
+  run covers a submission that no running engine took, a second port for one
+  client, a connect before the handshake, a client id that comes back before its
+  detach, the isolation of proving progress between two clients, a reset or a
+  resync after a worker's death, a bulk resync whose clear fails, the skipping
+  of the decode, the 60 s load bound or a lost runtime lock: no scenario
+  produces them, and the scenarios do not check what the page receives as
+  progress.
+
+With `fc48f479d2` (`1848e47e…7754`), on 2026-10-27, after
+`rm -rf node_modules && npm ci`, with Chromium from Playwright 1.63, the local
+chain of lace-platform `compose/midnight.yml` (node 0.22.5, indexer 4.0.1) and
+proof server 8.1.3:
+
+- `npm run typecheck`, `npm test` (153/153), `npm run build`, `npm run test:e2e`
+  (26/26, the three Worker-mode browser checks included, with the signer built
+  from `97b206f67b` named above) and `npm run test:runtime:production` (1/1)
+  passed; so did the key isolation check.
+- The interrupted submit with the check at the SDK call
+  (`--grep 'Interrupted submit'`, on a chain fresh from genesis): 2/2. On both
+  servers every `submitMidnightTx` promise fulfilled, none rejected, and the
+  interrupted one fulfilled with an `Err` holding
+  `MidnightSubmitInterruptedError`; the Pending row stayed, the indexer listed
+  the control once and the interrupted transaction not at all after five more
+  blocks, and the pool was empty. After the worker closed, the page reported the
+  account's sync as failed; the failure cleared once the new worker had synced
+  the account.
+- Every scenario on the local chain, on both servers (the command without
+  `--grep`): 19 passed, and the Cardano route was skipped on the development
+  server, as designed. That includes the transfer on the local chain, the three
+  two-tab scenarios on both servers (one worker, 3 open indexer subscriptions
+  with one tab and with two; the settings conflict, then adopt; the shared
+  reset, then `MidnightStaleTxError` for the other tab's earlier transfer), and
+  the interrupted submit on both servers.
+- The transfer on Preview was not run with this build.
+
+With `97b206f67b` (`bdeba2f7…d659`), on 2026-10-26, after
+`rm -rf node_modules && npm ci`, with Chromium from Playwright 1.63, the local
+chain of lace-platform `compose/midnight.yml` (node 0.22.5, indexer 4.0.1) and
+proof server 8.1.3:
+
+- `npm run typecheck`, `npm test` (153/153), `npm run build`, `npm run test:e2e`
+  (26/26, the three Worker-mode browser checks included, with the signer built
+  from `97b206f67b` named above) and `npm run test:runtime:production` (1/1)
+  passed; so did the key isolation check.
+- The interrupted submit with the check at the SDK call
+  (`--grep 'Interrupted submit'`, on a chain fresh from genesis): 2/2. On both
+  servers every `submitMidnightTx` promise fulfilled, none rejected, and the
+  interrupted one fulfilled with an `Err` holding
+  `MidnightSubmitInterruptedError`; the Pending row stayed, the indexer listed
+  the control once and the interrupted transaction not at all after five more
+  blocks, and the pool was empty.
+- Every scenario on the local chain, on both servers (the command without
+  `--grep`): 19 passed, and the Cardano route was skipped on the development
+  server, as designed. That includes the transfer on the local chain, the three
+  two-tab scenarios on both servers (one worker, 3 open indexer subscriptions
+  with one tab and with two; the settings conflict, then adopt; the shared
+  reset, then `MidnightStaleTxError` for the other tab's earlier transfer), and
+  the interrupted submit on both servers.
+- The transfer on Preview: 6/6, three runs of the command above, each on both
+  servers. Each time the worker, not the page, reached the node, the indexer and
+  the proof server; the scratch field echoed what was typed while the engine
+  synced; the worker sent one submission; the SDK returned the `txId` at
+  finality and history listed the hash as `Self`. Sync from empty memory storage
+  took 9.5 to 10.1 minutes, the transfer 22 to 33 seconds. Activity hashes: dev
+  `fde42e65…a6f6`, `23a2ef15…7531`, `1b4daec4…9c10`; production preview
+  `c474091a…200a`, `0e5cda12…281e`, `364cb1c2…8f4f`. The production build's
+  Cardano route loaded each time.
+
+With `3ce36fb837` (`21fd09a2…c1e2`), on 2026-10-26, after
+`rm -rf node_modules && npm ci`, with Chromium from Playwright 1.63, the local
+chain of lace-platform `compose/midnight.yml` (node 0.22.5, indexer 4.0.1) and
+proof server 8.1.3:
+
+- `npm run typecheck`, `npm test` (153/153), `npm run build`, `npm run test:e2e`
+  (26/26, the three Worker-mode browser checks included, with the `530fa46dfa`
+  signer build named above) and `npm run test:runtime:production` (1/1) passed;
+  so did the key isolation check.
+- The interrupted submit with the check at the SDK call
+  (`--grep 'Interrupted submit'`, on a chain fresh from genesis): 2/2. On both
+  servers every `submitMidnightTx` promise fulfilled, none rejected, and the
+  interrupted one fulfilled with an `Err` holding
+  `MidnightSubmitInterruptedError`.
+- Every scenario on the local chain, on both servers (the command without
+  `--grep`): 19 passed, and the Cardano route was skipped on the development
+  server, as designed. That includes the three two-tab scenarios on both servers
+  (one worker, 3 open indexer subscriptions with one tab and with two; the
+  settings conflict, then adopt; the shared reset, then `MidnightStaleTxError`
+  for the other tab's earlier transfer), the interrupted submit on both servers
+  (`interrupted`, the Pending row kept, the indexer listing the control once and
+  the interrupted transaction not at all after five more blocks, an empty pool,
+  one submission counted from just before the control), and the transfer on the
+  local chain.
+- The transfer on Preview: 6/6, three runs of the command above, each on both
+  servers. Each time the worker, not the page, reached the node, the indexer and
+  the proof server; the scratch field echoed what was typed while the engine
+  synced; the worker sent one submission; the SDK returned the `txId` at
+  finality and history listed the hash as `Self`. Sync from empty memory storage
+  took 9.5 to 10.2 minutes, the transfer 22 to 28 seconds. Activity hashes: dev
+  `3a1627e9…136c`, `1ee0722f…2147`, `fe3550ba…0976`; production preview
+  `d9863a1c…862f`, `66c23fee…b955`, `f282c7c7…98a8`. The production build's
+  Cardano route loaded each time.
+
+With `961ef2c2fa` (`8c7d6414…e1bb`), on 2026-10-26:
+
+- The same existing checks passed (`npm test` 151/151), and so did every
+  scenario on the local chain on both servers, the three two-tab scenarios
+  included. The interrupted submit also passed 2/2 alone on a chain fresh from
+  genesis, where the development server's run registered the wallet's NIGHT for
+  DUST first.
+- The transfer on Preview stopped after run 1 of 3. The production preview
+  passed (`125bdd4f…c706`). On the development server the SDK's submission
+  returned an error with no code and an empty message (the issue above, fixed in
+  `3ce36fb837`); the page recorded the outcome as uncertain, history did not
+  list the hash within 15 minutes, and the indexer did not list it 44 minutes
+  after the submission (`762e35e8…5d4b`). Why that submission failed is not
+  known.
+
+With the previous build (`8edaefc6…4b1a`), on 2026-10-25:
+
+- The same existing checks passed, and the interrupted submit passed 2/2 on the
+  local chain.
+- The tab and other scenarios on the local chain: on the production preview
+  7/7; on the development server 4/7, the three two-tab scenarios failing with
+  the SDK issue that `961ef2c2fa` fixed (a second engine for the second tab: no
+  shared engine, no settings conflict, no shared reset).
+- The transfer on Preview: 6/6, three runs of the command above, each on both
+  servers. Each time the worker, not the page, reached the node, the indexer and
+  the proof server; the scratch field echoed what was typed while the engine
+  synced; the worker sent one submission; the SDK returned the `txId` at
+  finality and history listed the hash as `Self`. Sync from empty memory storage
+  took 10 to 15 minutes, the transfer 22 to 28 seconds. Activity hashes: dev
+  `23c8435f…cace`, `d8cf39a4…d3de`, `fc088c42…1399`; production preview
+  `4fcdd404…498d`, `2fdd62ab…6a2f`, `ebd23e30…e505`. The production build's
+  Cardano route loaded each time.
 
 ### Capabilities and validation limits
 

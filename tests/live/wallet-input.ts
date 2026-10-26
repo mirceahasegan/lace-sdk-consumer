@@ -1,14 +1,27 @@
-export type TestWallet = { mnemonicWords: string[]; password: string; accountIndex: number; network: 'preview'; address: string };
+/** The networks a live run can target: Preview, or the local chain of lace-platform's `compose/midnight.yml`. */
+export type LiveNetwork = 'preview' | 'undeployed';
+/** The local chain's node and indexer, as lace-platform's `compose/midnight.yml` publishes them. */
+export const LOCAL_CHAIN_ENDPOINTS = { nodeAddress: 'http://localhost:9944', indexerAddress: 'http://localhost:8088/api/v4/graphql' } as const;
+/** `MIDNIGHT_LIVE`: `preview` or `undeployed` (the local chain); anything else disables the live suites. */
+export function liveNetwork(value: string | undefined): LiveNetwork | undefined {
+  return value === 'preview' || value === 'undeployed' ? value : undefined;
+}
+/** The endpoints a live run enters as custom endpoints: none for Preview's public ones. */
+export function liveEndpoints(network: LiveNetwork): { nodeAddress: string; indexerAddress: string } | undefined {
+  return network === 'undeployed' ? { ...LOCAL_CHAIN_ENDPOINTS } : undefined;
+}
+
+export type TestWallet = { mnemonicWords: string[]; password: string; accountIndex: number; network: LiveNetwork; address: string };
 
 // Deliberately generic errors: never serialize the caller's secret-bearing input.
-export function parseTestWallet(value: unknown): TestWallet {
+export function parseTestWallet(value: unknown, network: LiveNetwork = 'preview'): TestWallet {
   const v = value as Partial<TestWallet> & { passwordHex?: unknown };
-  if (!v || v.network !== 'preview' || typeof v.address !== 'string' || !v.address.startsWith('mn_addr_preview')) throw new Error('A Preview wallet with its expected public unshielded address is required.');
+  if (!v || v.network !== network || typeof v.address !== 'string' || !v.address.startsWith(`mn_addr_${network}`)) throw new Error(`A ${network} wallet with its expected public unshielded address is required.`);
   const password = v.passwordHex ?? v.password;
   if (typeof password !== 'string' || !password || !Array.isArray(v.mnemonicWords) || v.mnemonicWords.length < 12 || !v.mnemonicWords.every(w => typeof w === 'string' && !!w.trim())) throw new Error('Disposable wallet requires mnemonicWords and a nonempty session password or passwordHex.');
   const accountIndex = v.accountIndex ?? 0;
   if (!Number.isInteger(accountIndex) || accountIndex < 0 || accountIndex >= 2 ** 31) throw new Error('Invalid test account index.');
-  return { mnemonicWords: [...v.mnemonicWords], password, accountIndex, network: 'preview', address: v.address };
+  return { mnemonicWords: [...v.mnemonicWords], password, accountIndex, network, address: v.address };
 }
 
 export type PublicBalances = { address: { unshielded: string }; night: { available: string }; dust: { available: string }; synced: { unshielded: boolean; dust: boolean }; nightTokenId: string };

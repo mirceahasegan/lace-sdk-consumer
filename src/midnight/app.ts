@@ -1,5 +1,5 @@
-import { BASELINE, NETWORKS, PREVIEW_ENDPOINTS, proverDisclosure, validateConfig, type Network, type SessionConfig } from './config';
-import { OperationGate, SubmissionTracker, display, parseOutputs, parseHex, positiveAmount, submitTracked, type PrepareOptions, type Review } from './operations';
+import { BASELINE, ConfigError, NETWORKS, PREVIEW_ENDPOINTS, engineDisclosure, proverDisclosure, validateConfig, type Engine, type Network, type SessionConfig, type WorkerStorage } from './config';
+import { OperationGate, SubmissionTracker, WORKER_ERROR_HINTS, display, observeSubmitBoundary, parseOutputs, parseHex, positiveAmount, sdkErrorLabel, submitTracked, type PrepareOptions, type Review } from './operations';
 import type { Session, Recipe, Transaction, Batch, CircuitKeys, Account } from './runtime';
 
 document.title = 'Midnight · Lace SDK consumer';
@@ -12,16 +12,21 @@ h1,h2 { margin-top:0; } h2 { font-size:1.2rem; } label { display:block; margin:1
 <main><nav><a href="/">Cardano / passkey / custody</a></nav><h1>Midnight developer wallet</h1>
 <p>Restore a disposable test wallet, inspect its state, then explicitly review each operation. Session secrets stay in memory. Reloading clears the session.</p>
 <p id="status" role="status" aria-live="polite">No wallet loaded. Preview is selected.</p>
+<section id="responsiveness"><h2>Page responsiveness</h2><p>Type here while the wallet syncs. In Worker mode the engine syncs, builds, signs, proves and submits in the SDK's SharedWorker, off this page, so this field keeps up.</p>
+<label>Scratch text (kept in this field only; never stored or sent) <input id="scratch" type="text" autocomplete="off" spellcheck="false"></label><pre id="scratch-echo">Nothing typed.</pre></section>
 <section><h2>1. Restore and connect</h2><form id="restore-form" autocomplete="off" novalidate>
 <label>Recovery phrase <textarea id="phrase" rows="2" spellcheck="false" autocomplete="off" required></textarea></label>
 <label>Session password <input id="password" type="password" autocomplete="new-password" required></label>
 <div class="grid"><label>Network <select id="network">${NETWORKS.map(n => `<option value="${n}">${n}</option>`).join('')}</select></label>
 <label>Additional account index <input id="index" type="number" min="0" max="2147483647" value="0" required></label>
-<label>Prover <select id="prover"><option value="local">Local · 127.0.0.1:6300</option><option value="temenos">Temenos · attestation required</option></select></label></div>
+<label>Prover <select id="prover"><option value="local">Local · 127.0.0.1:6300</option><option value="temenos">Temenos · attestation required</option></select></label>
+<label>Engine <select id="engine"><option value="page">This page</option><option value="worker">SharedWorker (Worker mode)</option></select></label>
+<label>Worker storage <select id="worker-storage"><option value="memory">Memory, while the worker runs</option><option value="indexeddb">IndexedDB, across sessions</option></select></label></div>
+<label><input id="worker-adopt" type="checkbox"> Worker mode: use the running engine's settings when another tab already runs this account with other settings</label>
 <details><summary>Custom endpoints</summary><p>Leave both empty for SDK public endpoints. Custom networks require both. Changing setup requires a fresh restore.</p>
 <label>Node URL <input id="node" type="text"></label><label>Indexer URL <input id="indexer" type="text"></label></details>
 <button id="restore" type="submit">Restore wallet</button><button id="disconnect" type="button">Clear session</button>
-</form><small>Local proving requires a running proof server. Temenos requires successful attestation; neither option authorizes submission.</small>
+</form><small>Local proving requires a running proof server. Temenos requires successful attestation; neither option authorizes submission. Worker mode proves only through the local proof server: the SDK cannot run the Temenos attested prover in its worker. Tabs of this app that restore the same account in Worker mode share its engine.</small>
 <pre id="configuration">${display({ network: 'preview', ...PREVIEW_ENDPOINTS })}</pre></section>
 <div id="wallet-controls" hidden>
 <section><h2>2. Account state</h2><label>Account <select id="account"></select></label>
@@ -29,6 +34,7 @@ h1,h2 { margin-top:0; } h2 { font-size:1.2rem; } label { display:block; margin:1
 <div class="grid"><div><h3>Receive addresses and public keys</h3><pre id="addresses">Not observed</pre><pre id="keys">Not observed</pre></div><div><h3>Token balances</h3><small>Available and pending amounts are separate; amounts use smallest units.</small><pre id="tokens">Not observed</pre></div></div>
 <h3>DUST</h3><small>Generated balance can differ from spendable balance. Missing state is not zero.</small><pre id="dust">Not observed</pre>
 <h3>Synchronization</h3><small>Rounded progress alone is not completion. Cached state does not establish connectivity.</small><pre id="initialization">{"stage":"idle"}</pre><pre id="sync">Not observed</pre><pre id="readiness">Strict sub-wallet completion not observed.</pre><pre id="balances">Not observed</pre>
+<button id="rewatch">Observe this account again</button><small>After a Worker-mode error the account's streams end and nothing is retried. Observing again is a new call: it starts a new worker if the old one ended.</small>
 <details><summary>History and token display names</summary><p>History omits shielded-only rows. Connector getTxHistory and hintUsage remain unsupported.</p><pre id="history">Not observed</pre>
 <label>History row <select id="activity"></select></label><button id="details">Load activity details</button><pre id="activity-details">Not observed</pre>
 <label>Token <select id="token"></select></label><label>Display name <input id="token-name"></label><label>Ticker <input id="ticker" maxlength="4"></label><button id="rename">Save display names</button></details></section>
@@ -44,7 +50,7 @@ h1,h2 { margin-top:0; } h2 { font-size:1.2rem; } label { display:block; margin:1
 <label>Connector request JSON <textarea id="connector" rows="6">{"desiredOutputs":[],"options":{"payFees":true}}</textarea></label>
 <small>Transfer/intent outputs use kind, type (raw ledger token type), recipient, value (integer string). Balancing uses tx (hex) and options. Intent also requires desiredInputs and options.intentId.</small><button id="connector-run">Review connector operation</button>
 <details><summary>Sign a message</summary><label>Encoding <select id="encoding"><option value="text">text</option><option value="hex">hex</option><option value="base64">base64</option></select></label><label>Message <textarea id="message" rows="3"></textarea></label><button id="message-run">Review message signing</button><pre id="message-result">No signature.</pre></details>
-<details><summary>Prove / check a circuit</summary><p>Supply circuit material locally. Temenos does not support check; failures never fall back to HTTP.</p>
+<details><summary>Prove / check a circuit</summary><p>Supply circuit material locally. For a protocol circuit (a key location starting with <code>midnight/</code>) leave the three keys empty to use the proof server's built-in material. Temenos does not support check; failures never fall back to HTTP.</p>
 <label>Operation <select id="circuit-kind"><option value="prove">prove</option><option value="check">check</option></select></label><label>Key location <input id="key-location"></label><label>Preimage (hex) <textarea id="preimage" rows="2"></textarea></label>
 <label>Prover key (hex) <textarea id="prover-key" rows="2"></textarea></label><label>Verifier key (hex) <textarea id="verifier-key" rows="2"></textarea></label><label>ZKIR (hex) <textarea id="zkir" rows="2"></textarea></label>
 <label>Overwrite binding input (optional nonnegative integer, prove only)<input id="binding-input" inputmode="numeric"></label><button id="circuit-run">Review circuit disclosure</button><pre id="circuit-result">No circuit result.</pre></details></section></div>
@@ -113,10 +119,21 @@ function handle(id: string, action: () => unknown | Promise<unknown>) {
     try { await action(); } catch (error) { report(error); } finally { refreshButtons(); }
   });
 }
+/**
+ * The value of an SDK `Result`, or its error itself. `unwrap()` throws a plain Error that wraps the SDK error, which
+ * would hide its class and `code` from the status line.
+ */
+function okValue<T>(result: { isErr(): boolean; unwrap(): T }): T {
+  if (result.isErr()) throw (result as unknown as { error: unknown }).error;
+  return result.unwrap();
+}
 function report(error: unknown) {
   // Setup errors can contain library inputs. Never print phrase/password or raw wallet state.
   const message = error instanceof Error ? error.message : 'Operation failed';
-  status(session ? `Operation failed: ${message}. Submission/proving timeout may be uncertain; inspect state before retrying.` : 'Restore failed or was cancelled. Check phrase, password, network and prover setup.');
+  // The SDK's class name and code are fixed strings; Worker-mode codes also have a hint.
+  const label = sdkErrorLabel(error), code = (error as { code?: string } | undefined)?.code;
+  const hint = code ? WORKER_ERROR_HINTS[code] : undefined;
+  status(session ? `Operation failed: ${label ? `${label} ` : ''}${message}.${hint ? ` ${hint}` : ''} Submission/proving timeout may be uncertain; inspect state before retrying.` : 'Restore failed or was cancelled. Check phrase, password, network, prover and engine setup.');
 }
 function prepare(action: string, inputs: unknown, invoke: (assertCurrent: () => void) => Promise<unknown>, options?: PrepareOptions) {
   const { current, accountId } = selected();
@@ -156,6 +173,8 @@ element('restore-form').addEventListener('input', () => {
   if (session) clearSession();
 });
 handle('disconnect', () => clearSession());
+// Outside every form: typing here neither clears the session nor discards an operation.
+element('scratch').addEventListener('input', () => { const text = value('scratch'); put('scratch-echo', text ? `${text.length} characters: ${text}` : 'Nothing typed.'); });
 window.addEventListener('pagehide', () => clearSession(true));
 
 element('restore-form').addEventListener('submit', async event => {
@@ -169,7 +188,8 @@ element('restore-form').addEventListener('submit', async event => {
   element<HTMLInputElement>('phrase').value = ''; element<HTMLInputElement>('password').value = '';
   let created: Session | undefined;
   try {
-    const config: SessionConfig = validateConfig({ network: value('network') as Network, index: Number(value('index')), prover: value('prover') as SessionConfig['prover'], nodeAddress: value('node').trim(), indexerAddress: value('indexer').trim() });
+    const config: SessionConfig = validateConfig({ network: value('network') as Network, index: Number(value('index')), prover: value('prover') as SessionConfig['prover'], nodeAddress: value('node').trim(), indexerAddress: value('indexer').trim(),
+      engine: value('engine') as Engine, workerStorage: value('worker-storage') as WorkerStorage, adopt: element<HTMLInputElement>('worker-adopt').checked });
     if (!password.length || words.length < 12) throw new Error('Recovery phrase and session password required.');
     clearSession(); const version = setupRevision; restoring = true; element<HTMLButtonElement>('restore').disabled = true;
     status('Restoring keys in browser WASM. This can take a minute; no transaction will be signed.');
@@ -183,10 +203,15 @@ element('restore-form').addEventListener('submit', async event => {
     element<HTMLSelectElement>('account').replaceChildren(...accounts.map(a => new Option(a.accountId, a.accountId)));
     element<HTMLSelectElement>('account').selectedIndex = accounts.length - 1;
     element('wallet-controls').hidden = false;
-    put('configuration', { baseline: BASELINE, network: config.network, endpoints: config.nodeAddress ? { nodeAddress: config.nodeAddress, indexerAddress: config.indexerAddress } : created.sdk.MIDNIGHT_PUBLIC_ENDPOINTS[config.network as keyof typeof created.sdk.MIDNIGHT_PUBLIC_ENDPOINTS], prover: proverDisclosure(config) });
+    put('configuration', { baseline: BASELINE, network: config.network, endpoints: config.nodeAddress ? { nodeAddress: config.nodeAddress, indexerAddress: config.indexerAddress } : created.sdk.MIDNIGHT_PUBLIC_ENDPOINTS[config.network as keyof typeof created.sdk.MIDNIGHT_PUBLIC_ENDPOINTS], prover: proverDisclosure(config), engine: config.engine, ...(config.engine === 'worker' ? { workerStorage: config.workerStorage, adopt: config.adopt } : {}), engineDisclosure: engineDisclosure(config) });
     status('Restore returned. Waiting for engine state; no operation authorized.');
     watchAccount();
-  } catch (error) { if (!session) { password.fill(0); put('initialization', { stage: 'restore-failed' }); } report(error); }
+  } catch (error) {
+    if (!session) { password.fill(0); put('initialization', { stage: 'restore-failed' }); }
+    // A configuration refusal holds no secret input: show it, as the restore failure message cannot.
+    if (error instanceof ConfigError) status(`Restore refused: ${error.message}`);
+    else report(error);
+  }
   finally { words.fill(''); words = []; restoring = false; element<HTMLButtonElement>('restore').disabled = false; }
 });
 
@@ -200,21 +225,31 @@ function watchAccount() {
   // Only fixed stages and booleans cross this diagnostic boundary. Restore
   // returning establishes an entity, not a running or synchronized engine.
   const observed = { restoreReturned: true, balances: false, addresses: false, publicKeys: false, synchronized: false, syncFailed: false, balanceStreamFailed: false };
+  // The SDK error that ended the balance stream: only its class name and code, never its message.
+  let streamError: { label: string; code?: string } | undefined;
+  // The failure the status line last announced; each is announced once, so a later operation's outcome is not
+  // overwritten by the next state update.
+  let announced: string | undefined;
   const updateInitialization = () => {
     const stage = observed.syncFailed ? 'sync-failed' : observed.balanceStreamFailed ? 'balance-stream-failed'
       : observed.synchronized ? 'synchronized' : observed.balances ? 'state-observed' : 'waiting-for-engine';
     put('initialization', { stage, ...observed });
-    if (observed.syncFailed) status('Account synchronization failed. Engine readiness is not established. Clear the session before retrying.');
-    else if (observed.balanceStreamFailed) status('Engine state observation failed. Inspect synchronization status; restore alone does not establish readiness.');
+    // A named SDK error says more than the failed sync that follows it, so it takes the status line.
+    const failure = streamError ? `Engine state observation failed: ${streamError.label}. ${(streamError.code && WORKER_ERROR_HINTS[streamError.code]) || 'Inspect synchronization status; restore alone does not establish readiness.'}`
+      : observed.syncFailed ? 'Account synchronization failed. Engine readiness is not established. Clear the session before retrying.'
+      : observed.balanceStreamFailed ? 'Engine state observation failed. Inspect synchronization status; restore alone does not establish readiness.'
+      : undefined;
+    if (failure !== announced) { announced = failure; if (failure) status(failure); }
   };
   updateInitialization();
   subscriptions.push(
     sdk.observeMidnightBalances(wallet, { accountId }).subscribe({
       next: balances => { observed.balances = true; observed.synchronized = balances.synced.unshielded && balances.synced.shielded && balances.synced.dust; updateInitialization(); put('readiness', { strictlySynced: balances.synced }); put('balances', { ...balances, nightTokenId: `unshielded-${current.config.network}${sdk.NIGHT_TOKEN_ID}` }); },
       error: (error: unknown) => {
-        // Keep the argument bound for the opt-in debugger probe; never publish it.
+        // Keep the argument bound for the opt-in debugger probe; never publish it, only its SDK label.
         observed.balanceStreamFailed = true;
-        updateInitialization(); put('readiness', 'Engine state unavailable. Inspect sync failures or reset this account.');
+        const label = sdkErrorLabel(error); streamError = label ? { label, code: (error as { code?: string }).code } : undefined;
+        updateInitialization(); put('readiness', { state: 'Engine state unavailable. Inspect sync failures or reset this account.', ...(streamError ? { error: streamError.label } : {}) });
       },
     }),
     state.addresses.selectByAccountId$.subscribe(select => { const addresses = select(accountId); observed.addresses = !!addresses?.length; updateInitialization(); put('addresses', addresses); }),
@@ -250,6 +285,7 @@ function watchAccount() {
     }),
   );
 }
+handle('rewatch', () => { selected(); if (gate.irrevocable) { status(IN_FLIGHT); return; } status('Observing the account again; no operation authorized.'); watchAccount(); });
 handle('reset', () => { const { current, accountId } = selected(); if (!invalidate()) return; current.wallet.dispatch('midnightContext.resetSyncState', { accountId }); status('Reset requested. Observe sync; dispatch is not completion.'); });
 handle('details', () => loadDetails?.()); handle('rename', () => rename?.());
 function batch(): Batch {
@@ -261,7 +297,7 @@ function registration() { const { accountId } = selected(); const dustAddress = 
 handle('estimate', async () => {
   const { current } = selected(); const version = gate.version;
   const request = value('kind') === 'dust' ? { kind: 'dust-registration' as const, registration: registration() } : { kind: 'transfer' as const, transfer: batch() };
-  const fee = (await current.sdk.estimateMidnightFee(current.wallet, request)).unwrap(); gate.assertVersion(version);
+  const fee = okValue(await current.sdk.estimateMidnightFee(current.wallet, request)); gate.assertVersion(version);
   put('operation', { unsignedEstimate: fee, note: 'State/time dependent; not a guaranteed final fee.' });
 });
 handle('build', async () => {
@@ -269,20 +305,20 @@ handle('build', async () => {
   invalidate(); const { current } = selected();
   if (value('kind') === 'dust') {
     const request = registration(); operationInputs = request;
-    prepare('Register NIGHT for DUST (signs internally)', request, async () => ({ stage: 'registered', value: (await current.sdk.registerMidnightDust(current.wallet, request)).unwrap() }));
+    prepare('Register NIGHT for DUST (signs internally)', request, async () => ({ stage: 'registered', value: okValue(await current.sdk.registerMidnightDust(current.wallet, request)) }));
   } else {
     const request = batch(); const version = gate.version;
-    const built = (await current.sdk.buildMidnightTransfers(current.wallet, request)).unwrap(); gate.assertVersion(version);
+    const built = okValue(await current.sdk.buildMidnightTransfers(current.wallet, request)); gate.assertVersion(version);
     recipe = built; operationInputs = request; put('operation', 'Unsigned transfer built. Review signing next.');
   }
 });
 handle('sign', () => {
   const { current, accountId } = selected(); if (!recipe || signed) throw new Error('Build an unsigned transfer first.'); const prepared = recipe;
-  prepare('Sign transfer', operationInputs, async () => ({ stage: 'signed', value: (await current.sdk.signMidnightTx(current.wallet, { accountId, recipe: prepared })).unwrap() }));
+  prepare('Sign transfer', operationInputs, async () => ({ stage: 'signed', value: okValue(await current.sdk.signMidnightTx(current.wallet, { accountId, recipe: prepared })) }));
 });
 handle('prove', () => {
   const { current, accountId } = selected(); if (!recipe || !signed) throw new Error('Sign or register first.'); const prepared = recipe;
-  prepare('Prove transaction and disclose material', operationInputs, async assertCurrent => ({ stage: 'proved', value: (await current.sdk.proveMidnightTx(current.wallet, { accountId, recipe: prepared, onProgress: event => { try { assertCurrent(); put('progress', event); } catch { /* ignore late progress */ } } })).unwrap() }));
+  prepare('Prove transaction and disclose material', operationInputs, async assertCurrent => ({ stage: 'proved', value: okValue(await current.sdk.proveMidnightTx(current.wallet, { accountId, recipe: prepared, onProgress: event => { try { assertCurrent(); put('progress', event); } catch { /* ignore late progress */ } } })) }));
 });
 handle('submit', () => {
   const { current, accountId } = selected(); if (!transaction) throw new Error('Prove a transaction first.'); const finalized = transaction;
@@ -294,7 +330,10 @@ handle('submit', () => {
     transaction = undefined; // an uncertain submission cannot be blindly retried
     put('operation', 'Submission approved. Its outcome is under Submission; it cannot be cancelled.');
     const value = await submitTracked(submission, accountId, finalized, async () => {
-      const result = await current.sdk.submitMidnightTx(current.wallet, { accountId, transaction: finalized });
+      const pending = current.sdk.submitMidnightTx(current.wallet, { accountId, transaction: finalized });
+      // Test-only: records how the SDK's promise settled when a test asked for it; nothing otherwise.
+      observeSubmitBoundary((window as { __laceSubmitBoundary?: unknown }).__laceSubmitBoundary, pending, current.sdk.MidnightSubmitInterruptedError);
+      const result = await pending;
       if (result.isErr()) throw result.error;
       return result.value;
     });
@@ -305,7 +344,7 @@ handle('message-run', () => {
   if (gate.busy) throw new Error('Wait for the current operation.');
   invalidate();
   const { current, accountId } = selected(); const request = { accountId, data: value('message'), options: { keyType: 'unshielded' as const, encoding: value('encoding') as 'text' | 'hex' | 'base64' } };
-  prepare('Sign domain-separated message', request, async () => ({ stage: 'message', value: (await current.sdk.signMidnightData(current.wallet, request)).unwrap() }));
+  prepare('Sign domain-separated message', request, async () => ({ stage: 'message', value: okValue(await current.sdk.signMidnightData(current.wallet, request)) }));
 });
 handle('connector-run', () => {
   if (gate.busy) throw new Error('Wait for the current operation.');
@@ -320,7 +359,7 @@ handle('connector-run', () => {
       : kind === 'unsealed' ? await current.sdk.balanceMidnightUnsealedTransaction(current.wallet, props)
       : kind === 'intent' ? await current.sdk.makeMidnightIntent(current.wallet, props)
       : await current.sdk.makeMidnightTransfer(current.wallet, props);
-    return { stage: 'proved', value: result.unwrap() };
+    return { stage: 'proved', value: okValue(result) };
   });
 });
 handle('circuit-run', () => {
@@ -328,13 +367,17 @@ handle('circuit-run', () => {
   invalidate();
   const { current, accountId } = selected(); const kind = value('circuit-kind'); const keyLocation = value('key-location');
   const preimage = parseHex(value('preimage')), prover = parseHex(value('prover-key')), verifier = parseHex(value('verifier-key')), zkir = parseHex(value('zkir'));
-  if (!preimage.length || !keyLocation || !prover.length || !verifier.length || !zkir.length) throw new Error('Preimage, key location and all circuit material are required.');
+  // A failed lookup for a protocol circuit makes the SDK use the proof server's built-in material.
+  const builtIn = keyLocation.startsWith('midnight/') && !prover.length && !verifier.length && !zkir.length;
+  if (!preimage.length || !keyLocation || (!builtIn && (!prover.length || !verifier.length || !zkir.length))) throw new Error('Preimage, key location and all circuit material are required; only a midnight/ protocol circuit may leave all three keys empty.');
   const binding = value('binding-input').trim();
   if (binding && !/^[0-9]+$/.test(binding)) throw new Error('Binding input must be a nonnegative integer.');
   const overwriteBindingInput = binding ? BigInt(binding) : undefined;
-  const keyMaterialProvider: CircuitKeys = { getProverKey: async () => prover, getVerifierKey: async () => verifier, getZKIR: async () => zkir };
-  prepare(`Circuit ${kind}: disclose preimage and keys`, { kind, keyLocation, preimage: value('preimage'), proverKey: value('prover-key'), verifierKey: value('verifier-key'), zkir: value('zkir'), overwriteBindingInput }, async assertCurrent => {
-    const provider = (await current.sdk.getMidnightProvingProvider(current.wallet, { accountId, keyMaterialProvider })).unwrap();
+  const noLocalMaterial = async (): Promise<Uint8Array> => { throw new Error(`No local material for ${keyLocation}`); };
+  const keyMaterialProvider: CircuitKeys = builtIn ? { getProverKey: noLocalMaterial, getVerifierKey: noLocalMaterial, getZKIR: noLocalMaterial }
+    : { getProverKey: async () => prover, getVerifierKey: async () => verifier, getZKIR: async () => zkir };
+  prepare(`Circuit ${kind}: disclose preimage${builtIn ? ' (built-in protocol material)' : ' and keys'}`, { kind, keyLocation, preimage: value('preimage'), proverKey: value('prover-key'), verifierKey: value('verifier-key'), zkir: value('zkir'), overwriteBindingInput, ...(builtIn ? { material: 'built-in' } : {}) }, async assertCurrent => {
+    const provider = okValue(await current.sdk.getMidnightProvingProvider(current.wallet, { accountId, keyMaterialProvider }));
     assertCurrent(); const result = kind === 'check' ? await provider.check(preimage, keyLocation) : await provider.prove(preimage, keyLocation, overwriteBindingInput);
     return { stage: 'circuit', value: result instanceof Uint8Array ? Array.from(result, b => b.toString(16).padStart(2, '0')).join('') : result };
   });

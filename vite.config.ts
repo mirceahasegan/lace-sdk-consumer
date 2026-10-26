@@ -29,7 +29,11 @@ export default defineConfig(({ mode }) => ({
     ],
   },
   optimizeDeps: {
-    include: ['buffer', 'assert'],
+    // Worker mode on the development server: Vite serves the SDK's worker
+    // files without converting CommonJS, and the worker imports this CommonJS
+    // package from the app's install, so it must be pre-bundled (the SDK's
+    // Midnight guide, "Worker mode", "Bundlers").
+    include: ['buffer', 'assert', '@subsquid/scale-codec'],
     // wasm-bindgen's JS glue imports its WASM, whose host imports point back
     // into that glue (ledger also uses #self in snippets). Prebundling only
     // the JS splits this cycle and calls __wbindgen_start before initialization.
@@ -42,9 +46,9 @@ export default defineConfig(({ mode }) => ({
     rolldownOptions: { plugins: [verifierBrowserPlugin()] },
   },
   // `@laceio/sdk/midnight` names its Worker-mode SharedWorker script, so a
-  // production build bundles that worker even though this app runs the
-  // engine on the page. The ledger's WebAssembly uses top-level await, which
-  // only the ES worker format supports (the SDK's Midnight guide, "Worker mode").
+  // production build bundles that worker in both engine modes. The worker
+  // loads the ledger's WebAssembly with top-level await, which only the ES
+  // worker format supports (the SDK's Midnight guide, "Install").
   worker: { format: 'es' },
   // The regression build adds a probe entry using the same production config.
   // It is absent from ordinary application builds.

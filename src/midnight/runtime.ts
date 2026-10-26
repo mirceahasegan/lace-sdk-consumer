@@ -1,6 +1,6 @@
 // Every wallet operation/state read stays on the packaged public Midnight entry.
 import * as sdk from '@laceio/sdk/midnight';
-import { BASELINE_FLAGS, TEMENOS_URL, validateConfig, type SessionConfig } from './config';
+import { BASELINE_FLAGS, LOCAL_PROOF_SERVER_URL, TEMENOS_URL, validateConfig, workerOption, type SessionConfig } from './config';
 import { createConsumerTemenosProver } from './temenos-provider';
 
 export async function restore(words: string[], password: Uint8Array, requested: SessionConfig) {
@@ -15,12 +15,16 @@ export async function restore(words: string[], password: Uint8Array, requested: 
       ...(config.prover === 'temenos' ? { proofServer: { kind: 'tee-delegated', url: TEMENOS_URL, label: 'Temenos' } } : {}),
     },
   };
+  // Worker mode runs each account's engine in the SDK's SharedWorker, which proves through the proof
+  // server URL; validateConfig refuses Temenos with it, as createMidnightModule does.
+  const worker = workerOption(config);
   const wallet = await sdk.createLaceWallet({
     modules: [sdk.m.featureDev, sdk.m.storageInMemory, sdk.createMidnightModule({
-      password, proofServerUrl: 'http://127.0.0.1:6300', networks: overrides,
+      password, proofServerUrl: LOCAL_PROOF_SERVER_URL, networks: overrides,
       ...(config.prover === 'temenos' ? {
         createAttestedProver: createConsumerTemenosProver,
       } : {}),
+      ...(worker ? { worker } : {}),
     })] as const,
     environment: 'development', featureFlags,
     config: { defaultFeatureFlags: featureFlags, extraFeatureFlags: [], defaultMidnightTestnetNetworkId: config.network === 'mainnet' ? 'preview' : config.network },
