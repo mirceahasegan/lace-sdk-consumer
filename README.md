@@ -338,10 +338,16 @@ the installed commit. On 2026-10-27, with the build of `fc48f479d2` and after
 `rm -rf node_modules && npm ci`, they passed again: `npm test` 153/153, and
 `npm run test:e2e` 26/26 with the same `97b206f67b` signer build, since
 `fc48f479d2` does not change the signer's source. On 2026-10-29, with the
-installed build (`68e9ff5aaa`) and after `rm -rf node_modules && npm ci`, they
+build of `68e9ff5aaa` and after `rm -rf node_modules && npm ci`, they
 passed again: `npm test` 153/153, and `npm run test:e2e` 26/26 with the same
 signer build, since `68e9ff5aaa` does not change the signer's source either.
-Worker mode's validation is under [Worker mode, live](#worker-mode-live).
+On 2026-10-30, with the installed build (`26afd3d2ea`) and after
+`rm -rf node_modules && npm ci`, the checks listed under
+[Checks and opt-in live validation](#checks-and-opt-in-live-validation) passed:
+`npm run typecheck`, `npm run build`, `npm test` 156/156, the five offline browser
+specs 22/22, `npm run test:runtime:production` 1/1, and the passkey and custody
+specs 4/4 with a signer built from `26afd3d2ea`. The key isolation check was not
+rerun. Worker mode's validation is under [Worker mode, live](#worker-mode-live).
 
 #### Earlier canary build `75c3de4267`
 
@@ -725,6 +731,21 @@ MIDNIGHT_LIVE=preview MIDNIGHT_LIVE_RESET=1 MIDNIGHT_LIVE_PROVER=local \
   npx playwright test --config playwright.midnight-worker-live.config.ts --grep 'reset frees'
 ```
 
+Page-mode validation on Preview on 2026-10-30 with the installed build
+(`26afd3d2ea`, a local build, not a published canary), for lace-platform#2939, with
+Chromium from Playwright 1.63, each on its first attempt:
+
+- Read-only (`midnight.live.spec.ts`, no opt-ins): 3/3, the reset check skipped.
+- Wallet-free Temenos preflight: 1/1, all five phases and the channel.
+- One smallest NIGHT unit to the wallet's own address, proved through Temenos:
+  1/1, `confirmed` and listed as `Self`, activity hash
+  `0d88f6d9c894017f289ce8d6dd3107ddceada156cc3c580d2475fe98a0f400f3`. The relay
+  answered all three calls to the encrypted proving route with 200.
+- The reset check, with nothing signed, proved or submitted: 1/1. Before the build, 5000000000 NIGHT
+  available, none pending and all DUST spendable. After the build, 4999999999
+  available, 1 pending and no DUST spendable. After the reset, 5000000000
+  available, none pending and all DUST spendable.
+
 ### Worker mode, live
 
 `playwright.midnight-worker-live.config.ts` (`npm run test:midnight:worker:live`)
@@ -842,7 +863,21 @@ while a DevTools session is attached to it, and connects the same page's next
 `new SharedWorker` to that dead worker, so the helper detaches before it closes a
 worker, and the engine-load scenario observes without attaching.
 
-Validation on 2026-10-29 with the installed SDK (`68e9ff5aaa`), after
+Validation on Preview on 2026-10-30 with the installed SDK (`26afd3d2ea`, a local
+build, not a published canary, `7ae23496…68bc`), for lace-platform#2939, after
+`rm -rf node_modules && npm ci`, with Chromium from Playwright 1.63 and proof
+server 8.1.3, each on its first attempt:
+
+- The transfer on both servers: 2/2, `confirmed` and listed as `Self`, activity
+  hashes `89177daa0484e373fd8e315f17b7e083d6637c54756d25681a9d4452d8806ea0` (dev) and
+  `950217638654a32af313c49d429ffc33067ccf7f62a9c5d76e9244032bb08d62` (preview). The
+  production build's Cardano route: 1/1.
+- The reset check on both servers: 2/2, with the same three NIGHT and DUST states
+  as in page mode.
+- The local-chain scenarios were not rerun on this build. Temenos is refused in
+  Worker mode.
+
+Validation on 2026-10-29 with the build of `68e9ff5aaa`, after
 `rm -rf node_modules && npm ci`, with Chromium from Playwright 1.63, the local
 chain of lace-platform `compose/midnight.yml` (node 0.22.5, indexer 4.0.1) and
 proof server 8.1.3:
@@ -1056,8 +1091,8 @@ Those checks are separate from the incomplete live validation below.
 | Unsigned fee: `estimateMidnightFee` | No signing, fee branches, insufficient DUST | Independent non-proving check incomplete; the fee a confirmed transfer consumed is not verified. |
 | Stages: `signMidnightTx`, `proveMidnightTx`, `submitMidnightTx` | Failures, timeouts, consumer consent, in-flight submission and history reconciliation | Registration stages confirmed. The earlier local transfer confirmed on chain while the page lost the identifier (cause unestablished). The 2026-10-16 Temenos runs observed page/history confirmation and SDK return for the exact activity hash. Transfer balance and fee consumption remain unverified. |
 | Progress: `proveMidnightTx.onProgress` | Actual events, concurrency, timeout | Registration completion and local transfer Proved observed. Concurrent live progress/timeout behavior unrun. |
-| Prover/TEE: `createAttestedProver`, config selectors | Routing, trust, refusal, cleanup | Five-phase browser attestation and encrypted proving succeeded on the aligned Preview deployment with verifier 0.3.0 on 2026-10-16 for both builds; transfers confirmed, no fallback. One attempt on the merged build received upstream HTTP 404/400 from the encrypted proxy and passed when run again; the earlier HTTP400 is historical evidence. Local 8.1.3 proving and a confirmed submission also observed. |
-| Resync: `midnightContext.resetSyncState` | Stop/delete/restart and failure isolation | Selected-account recovery check incomplete; other-account survival unrun. In-memory storage does not validate persisted adapters. |
+| Prover/TEE: `createAttestedProver`, config selectors | Routing, trust, refusal, cleanup | Five-phase browser attestation and encrypted proving succeeded on the aligned Preview deployment with verifier 0.3.0 on 2026-10-16 for both builds; transfers confirmed, no fallback. One attempt on the merged build received upstream HTTP 404/400 from the encrypted proxy and passed when run again; the earlier HTTP400 is historical evidence. On 2026-10-30, on the build of `26afd3d2ea`, the preflight and one transfer proved through Temenos passed on the first attempt. Local 8.1.3 proving and a confirmed submission also observed. |
+| Resync: `midnightContext.resetSyncState` | Stop/delete/restart and failure isolation | On Preview on 2026-10-30, in page mode and in Worker mode, a completed reset freed the NIGHT and the DUST that a built transfer reserved. Shielded coins were not reserved in that check. Other-account survival unrun. In-memory storage does not validate persisted adapters. |
 | Names: validators, `tokens.upsertTokenMetadata` | Rules and metadata preservation | Live native rename refusal incomplete; non-native rename/sync persistence needs a funded token/metadata fixture. |
 | Connector: sealed/unsealed balance, `makeMidnightTransfer`, `makeMidnightIntent` | Binding, mixed assets, fee opt-out, conditional signing | Real sealed/unsealed/intent fixtures and funded mixed assets absent. Helpers may sign/prove; excluded from non-proving checks. `intentId` ignored. |
 | Message signing: `signMidnightData` | Byte domain, signatures, account/options/errors, consent | Live text/hex/base64 verification, account-key binding and cancellation checks incomplete. |
